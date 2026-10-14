@@ -1,0 +1,10 @@
+{
+  "name": "blacksite-ghost-stealth-shooter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HTML5 Mobile Tactical Stealth AI Shooter in a Military Base",
+  "scripts": {
+    "start": "python3 -m http.server ${PORT:-3000} --bind 127.0.0.1",
+    "dev": "python3 -m http.server ${PORT:-3000} --bind 127.0.0.1"
+  }
+}

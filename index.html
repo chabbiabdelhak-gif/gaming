@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>عملية: شبح القاعدة | Tactical Stealth AI Shooter</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="tactical-overlay" class="tactical-overlay"></div>
+
+    <div id="top-hud">
+      <div id="status-panel" class="hud-card">
+        <div class="status-row">
+          <span>HP</span>
+          <div class="bar-track"><div id="hp-bar" class="bar-fill"></div></div>
+          <span id="hp-val">100%</span>
+        </div>
+        <div class="status-row">
+          <span>NVG/TAC</span>
+          <div class="bar-track"><div id="energy-bar" class="bar-fill"></div></div>
+          <span id="energy-val">100%</span>
+        </div>
+        <div class="stealth-badges">
+          <span id="stance-badge" class="badge">تسلل صامت</span>
+          <span id="visibility-badge" class="badge">في الظل</span>
+        </div>
+      </div>
+
+      <div id="mission-panel" class="hud-card">
+        <div id="base-alert-banner">
+          <span id="alert-dot">●</span>
+          <span id="alert-status-text">حالة القاعدة: هدوء تام (STEALTH)</span>
+        </div>
+        <div id="objective-text">الهدف الحالي: اخترق غرفة الرادار لتعطيل الليزر والكاميرات أو تسلل للمحطات السرية</div>
+        <div class="objectives-progress">
+          <span id="obj-radar" class="obj-pill active">1. رادار الأمن (اختياري)</span>
+          <span id="obj-term1" class="obj-pill active">2. الخوادم السرية (0/2)</span>
+          <span id="obj-extract" class="obj-pill">3. مهبط المروحية للإخلاء</span>
+        </div>
+      </div>
+
+      <div id="right-hud">
+        <div id="minimap-wrapper" class="hud-card">
+          <canvas id="minimapCanvas" width="180" height="135"></canvas>
+          <span class="minimap-label">SAT-RADAR</span>
+        </div>
+        <div class="hud-top-buttons">
+          <button id="sound-toggle-btn" class="icon-btn" title="تبديل الصوت">🔊 صوت</button>
+          <button id="restart-btn" class="icon-btn" title="إعادة المهمة">🔄 إعادة</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="context-prompt">
+      <span>⚡</span>
+      <span id="context-prompt-text">اضغط لتنفيذ الاغتيال الصامت</span>
+    </div>
+
+    <div id="comms-toast">القيادة: تم إنزالك جنوب القاعدة العسكرية، ابقَ بعيداً عن مخاريط الرؤية والأنوار الكاشفة.</div>
+
+    <div id="touch-controls">
+      <div id="left-joystick-zone" class="joystick-zone">
+        <div class="joystick-base">
+          <div class="joystick-Crosshair">MOVE / تحرك</div>
+        </div>
+        <div id="left-knob" class="joystick-knob"></div>
+      </div>
+
+      <div id="right-joystick-zone" class="joystick-zone">
+        <div class="joystick-base">
+          <div class="joystick-Crosshair">AIM & FIRE</div>
+        </div>
+        <div id="right-knob" class="joystick-knob"></div>
+      </div>
+
+      <button id="quick-action-btn" title="اغتيال صامت / اختراق (E / F)">
+        <span>⚡</span>
+        <span id="quick-action-label">تفاعل</span>
+      </button>
+
+      <div id="tactical-bar">
+        <button id="btn-weapon" class="tac-btn" title="تبديل السلاح (Q / 1-3)">
+          <span class="key-hint">Q</span>
+          <span class="btn-icon" id="weapon-icon">🔫</span>
+          <span class="btn-label" id="weapon-name">USP كاتم</span>
+          <span class="btn-sub" id="weapon-ammo">12 / ∞</span>
+        </button>
+
+        <button id="btn-stance" class="tac-btn active" title="تبديل وضع التسلل / الجري (C / Shift)">
+          <span class="key-hint">C</span>
+          <span class="btn-icon">🥷</span>
+          <span class="btn-label" id="stance-btn-label">تسلل</span>
+          <span class="btn-sub">صامت</span>
+        </button>
+
+        <button id="btn-decoy" class="tac-btn" title="رمي عملة/صفارة استدراج الحراس (G)">
+          <span class="key-hint">G</span>
+          <span class="btn-icon">🪙</span>
+          <span class="btn-label">استدراج</span>
+          <span class="btn-sub" id="decoy-count">x4</span>
+        </button>
+
+        <button id="btn-smoke" class="tac-btn" title="قنبلة دخان لحجب رؤية الحراس والليزر (X)">
+          <span class="key-hint">X</span>
+          <span class="btn-icon">💨</span>
+          <span class="btn-label">دخان</span>
+          <span class="btn-sub" id="smoke-count">x2</span>
+        </button>
+
+        <button id="btn-nvg" class="tac-btn" title="منظار الرؤية الليلية والحرارية (N)">
+          <span class="key-hint">N</span>
+          <span class="btn-icon">🥽</span>
+          <span class="btn-label">رؤية ليلية</span>
+          <span class="btn-sub">NVG</span>
+        </button>
+      </div>
+    </div>
+
+    <div id="start-modal" class="modal-backdrop">
+      <div class="modal-box">
+        <span class="modal-tag">TOP SECRET // MILITARY BASE INFILTRATION</span>
+        <h1 class="modal-title">عملية: شبح القاعدة العسكرية</h1>
+        <p class="modal-subtitle">
+          أنت عميل قوات خاصة مكلف بالتسلل ليلاً إلى قاعدة عسكرية محصنة. الحراس مزودون بذكاء اصطناعي تكتيكي: يرصدون الضوء، يسمعون خطوات الجري وإطلاق النار، يفحصون أماكن الاشتباه، ويطلقون الإنذار العام عند كشفك.
+        </p>
+        <div class="briefing-grid">
+          <div class="briefing-item">
+            <strong>🎯 أهداف المهمة</strong>
+            1. تعطيل غرفة الرادار لإيقاف الكاميرات وبوابات الليزر.<br/>
+            2. اختراق محطتي البيانات السرية (A و B).<br/>
+            3. الوصول إلى مهبط المروحية شمال القاعدة للإخلاء.
+          </div>
+          <div class="briefing-item">
+            <strong>🧠 ذكاء الحراس والتسلل</strong>
+            • ابقَ في الظلال وفي وضع التسلل لتقليل مدى رؤيتهم.<br/>
+            • اقترب من خلف الحارس لتنفيذ <b>اغتيال صامت ⚡</b>.<br/>
+            • استخدم <b>الاستدراج 🪙</b> لصرف انتباه الحراس عن البوابات.
+          </div>
+          <div class="briefing-item">
+            <strong>📱 تحكم الهاتف واللمس</strong>
+            • العصا اليسرى: التحرك والتسلل.<br/>
+            • العصا اليمنى: التصويب بالليزر والإطلاق.<br/>
+            • الشريط السفلي: تبديل الأسلحة، الدخان، الاستدراج، والرؤية الليلية.
+          </div>
+          <div class="briefing-item">
+            <strong>⌨️ تحكم الحاسوب (اختياري)</strong>
+            • <b>WASD</b> للحركة | <b>الفأرة</b> للتصويب والإطلاق.<br/>
+            • <b>C</b> تسلل/جري | <b>E/F</b> اغتيال/اختراق | <b>Q</b> سلاح.<br/>
+            • <b>G</b> استدراج صوتي | <b>X</b> قنبلة دخان | <b>N</b> رؤية ليلية.
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="start-mission-btn" class="primary-btn">بدء عملية التسلل الآن ▶</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="end-modal" class="modal-backdrop hidden">
+      <div class="modal-box">
+        <span id="end-tag" class="modal-tag">MISSION REPORT</span>
+        <h2 id="end-title" class="modal-title">اكتملت المهمة بنجاح!</h2>
+        <p id="end-subtitle" class="modal-subtitle">تم استخراج البيانات السرية ومغادرة القاعدة العسكرية بنجاح.</p>
+        <div class="stats-summary">
+          <div class="stat-box">
+            <div id="stat-rank" class="val">S+</div>
+            <div class="lbl">التقييم التكتيكي</div>
+          </div>
+          <div class="stat-box">
+            <div id="stat-kills" class="val">0</div>
+            <div class="lbl">تحييد الحراس</div>
+          </div>
+          <div class="stat-box">
+            <div id="stat-alerts" class="val">0</div>
+            <div class="lbl">مرات الإنذار</div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="play-again-btn" class="primary-btn">إعادة المهمة التكتيكية ↻</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
