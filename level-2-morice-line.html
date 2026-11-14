@@ -538,10 +538,10 @@ if(water>0.){
   vec3 flatn=normalize(vec3(rp.x+wv.x,1.,rp.y+wv.y));
   wn=normalize(mix(wn,flatn,water));
   mudcol=mix(mudcol,vec3(.03,.03,.028),water*smoothstep(-.02,.1,wd));
-  trough=mix(trough,.03,water);
+  trough=mix(trough,.08,water);
 }
 diffuseColor.rgb=mudcol;`)
-    .replace('#include <roughnessmap_fragment>','float roughnessFactor=clamp(trough,.03,1.);')
+    .replace('#include <roughnessmap_fragment>','float roughnessFactor=clamp(trough,.08,1.);')
     .replace('#include <normal_fragment_maps>','normal=normalize((viewMatrix*vec4(wn,0.)).xyz);');
 };
 const terrain = new THREE.Mesh(terrainGeo, terrainMat); terrain.receiveShadow = true; terrain.frustumCulled = false; scene.add(terrain);
@@ -552,7 +552,7 @@ const barkMat = new THREE.MeshStandardMaterial({map:tBarkC, normalMap:tBarkN, no
 const woodMat = new THREE.MeshStandardMaterial({map:tWoodC, normalMap:tWoodN, normalScale:NS, roughness:.5});
 const steelMat = new THREE.MeshStandardMaterial({color:C3(.07,.05,.04), normalMap:tWoodN, roughness:.5, metalness:.6, side:THREE.DoubleSide});
 const wireMat = new THREE.MeshStandardMaterial({color:C3(.16,.16,.17), roughness:.35, metalness:.9});
-const insMat = new THREE.MeshStandardMaterial({color:C3(.13,.055,.035), roughness:.16, metalness:0});
+const insMat = new THREE.MeshStandardMaterial({color:C3(.13,.055,.035), roughness:.22, metalness:0});
 const signMat = new THREE.MeshStandardMaterial({map:tSign, roughness:.35, metalness:.25});
 function addMerged(list, mat, cast=true){
   if(!list.length) return; const m=new THREE.Mesh(mergeGeometries(list),mat);
@@ -645,20 +645,20 @@ scatter(clusterGeo(11,.46,true),foliage(new THREE.MeshStandardMaterial({map:tLea
   barbM.forEach((b,i)=>{_e.set(b[3],b[4],0,'YXZ');_q.setFromEuler(_e);_m.compose(_p.set(b[0],b[1],b[2]),_q,_s.set(1,1,1));bm.setMatrixAt(i,_m)});
   bm.frustumCulled=false; scene.add(bm); noAO.push(bm);
   const dm=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.0065,1),
-    new THREE.MeshStandardMaterial({color:C3(.8,.9,1),roughness:.04,metalness:1,emissive:C3(.2,.28,.4)}),dropM.length);
+    new THREE.MeshStandardMaterial({color:C3(.8,.9,1),roughness:.14,metalness:1,emissive:C3(.2,.28,.4)}),dropM.length);
   dropM.forEach((d,i)=>{_m.compose(_p.set(d[0],d[1],d[2]),_q.identity(),_s.set(1,1.35,1));dm.setMatrixAt(i,_m)});
   dm.frustumCulled=false; scene.add(dm); noAO.push(dm);
 }
 
 /* ------------------------------------------------- searchlight and sparks */
-const spot=new THREE.SpotLight(C3(1,.95,.84),5200,150,.105,.55,1.5);
+const spot=new THREE.SpotLight(C3(1,.95,.84),3600,150,.105,.55,1.5);
 spot.position.copy(towerLight); scene.add(spot, spot.target);
 if(!LOW){spot.castShadow=true;spot.shadow.mapSize.set(1024,1024);spot.shadow.camera.near=2;spot.shadow.camera.far=120;spot.shadow.bias=-.0008}
 const CONE=70;
 const coneGeo=new THREE.ConeGeometry(Math.tan(.105)*CONE,CONE,32,1,true); coneGeo.translate(0,-CONE/2,0);
 const cone=new THREE.Mesh(coneGeo,new THREE.ShaderMaterial({transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,fog:false,
   vertexShader:`varying float vL;varying vec3 vN,vV;void main(){vL=-position.y/${CONE}.;vec4 mv=modelViewMatrix*vec4(position,1.);vN=normalize(normalMatrix*normal);vV=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}`,
-  fragmentShader:'varying float vL;varying vec3 vN,vV;void main(){float f=pow(abs(dot(normalize(vN),normalize(vV))),2.2);float a=f*pow(1.-vL,1.7)*smoothstep(0.,.015,vL)*.5;gl_FragColor=vec4(vec3(.75,.82,.95)*a,1.);}'}));
+  fragmentShader:'varying float vL;varying vec3 vN,vV;void main(){float f=pow(abs(dot(normalize(vN),normalize(vV))),2.2);float a=f*pow(clamp(1.-vL,0.,1.),1.7)*smoothstep(0.,.015,vL)*.5;gl_FragColor=vec4(vec3(.75,.82,.95)*a,1.);}'}));
 cone.position.copy(towerLight); cone.frustumCulled=false; cone.renderOrder=7; scene.add(cone); noAO.push(cone);
 const lens=new THREE.Sprite(new THREE.SpriteMaterial({map:tGlow,color:C3(3,2.9,2.6),blending:THREE.AdditiveBlending,depthWrite:false,transparent:true,fog:false}));
 lens.position.copy(towerLight); lens.scale.set(2.2,2.2,1); scene.add(lens); noAO.push(lens);
@@ -703,6 +703,10 @@ void main(){vec3 box=vec3(32.,20.,32.);vec3 p=position*box;float sp=12.+4.*fract
 const rt=new THREE.WebGLRenderTarget(innerWidth*pixelRatio,innerHeight*pixelRatio,{type:THREE.HalfFloatType,samples:LOW?0:4});
 const composer=new EffectComposer(renderer,rt);
 composer.addPass(new RenderPass(scene,camera));
+// Clamp HDR and drop NaN/Inf before bloom: one bad pixel otherwise spreads into large black squares.
+composer.addPass(new ShaderPass({uniforms:{tDiffuse:{value:null}},
+  vertexShader:"varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}",
+  fragmentShader:"uniform sampler2D tDiffuse;varying vec2 vUv;float fx(float x){return (x>=0.&&x<=48.)?x:((x>48.)?48.:0.);}void main(){vec3 c=texture2D(tDiffuse,vUv).rgb;gl_FragColor=vec4(fx(c.r),fx(c.g),fx(c.b),1.);}"}));
 let gtao=null;
 if(!LOW){
   gtao=new GTAOPass(scene,camera,innerWidth,innerHeight);

@@ -483,10 +483,10 @@ if(water>0.){
   vec3 flatn=normalize(vec3(rp.x+wv.x,1.,rp.y+wv.y));
   wn=normalize(mix(wn,flatn,water));
   mudc=mix(mudc,vec3(.058,.052,.042)*vAO,water*smoothstep(-.02,.1,wd));
-  trough=mix(trough,.035,water);
+  trough=mix(trough,.08,water);
 }
 diffuseColor.rgb=mudc;`)
-    .replace('#include <roughnessmap_fragment>','float roughnessFactor=clamp(trough,.03,1.);')
+    .replace('#include <roughnessmap_fragment>','float roughnessFactor=clamp(trough,.08,1.);')
     .replace('#include <normal_fragment_maps>','normal=normalize((viewMatrix*vec4(wn,0.)).xyz);');
 };
 const terrain = new THREE.Mesh(terrainGeo, terrainMat); terrain.receiveShadow = true; terrain.frustumCulled = false; scene.add(terrain);
@@ -623,6 +623,10 @@ let nextFlash=5, flashT=-1;
 const rt=new THREE.WebGLRenderTarget(innerWidth*pixelRatio,innerHeight*pixelRatio,{type:THREE.HalfFloatType,samples:LOW?0:4});
 const composer=new EffectComposer(renderer,rt);
 composer.addPass(new RenderPass(scene,camera));
+// Clamp HDR and drop NaN/Inf before bloom: one bad pixel otherwise spreads into large black squares.
+composer.addPass(new ShaderPass({uniforms:{tDiffuse:{value:null}},
+  vertexShader:"varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}",
+  fragmentShader:"uniform sampler2D tDiffuse;varying vec2 vUv;float fx(float x){return (x>=0.&&x<=48.)?x:((x>48.)?48.:0.);}void main(){vec3 c=texture2D(tDiffuse,vUv).rgb;gl_FragColor=vec4(fx(c.r),fx(c.g),fx(c.b),1.);}"}));
 let gtao=null;
 if(!LOW){
   gtao=new GTAOPass(scene,camera,innerWidth,innerHeight);
