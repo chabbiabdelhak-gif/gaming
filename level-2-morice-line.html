@@ -104,6 +104,9 @@ float fbm(vec2 uv,vec2 per,int oct){float s=0.,a=.5,n=0.;for(int i=0;i<8;i++){if
 float worley(vec2 uv,vec2 per){vec2 p=uv*per,i=floor(p),f=fract(p);float d=1.5;
   for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){vec2 g=vec2(float(x),float(y));vec2 c=mod(i+g,per);
     vec2 o=vec2(hash(c),hash(c+57.31));d=min(d,length(g+o-f));}return d;}
+float wedge(vec2 uv,vec2 per){vec2 p=uv*per,i=floor(p),f=fract(p);float d1=9.,d2=9.;
+  for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){vec2 g=vec2(float(x),float(y));vec2 c=mod(i+g,per);
+    vec2 o=vec2(hash(c),hash(c+57.31));float d=length(g+o-f);if(d<d1){d2=d1;d1=d;}else if(d<d2){d2=d;}}return d2-d1;}
 // fallen pine needles: one randomly oriented segment per cell
 float needles(vec2 uv,float n,float seed){vec2 p=uv*n,i=floor(p),f=fract(p);float h=0.;
   for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){vec2 g=vec2(float(x),float(y));vec2 c=mod(i+g,vec2(n))+seed;
@@ -121,15 +124,19 @@ float H(vec2 uv){
     float h=base*.42+clod*.3*smoothstep(.38,.6,fbm(uv+.5,vec2(5.),2))+clod2*.22+peb*.16;
     if(h<.38)h=mix(.38,h,.45);
     return h+fbm(uv,vec2(64.),3)*.035;
-  }else if(mode<1.5){ // pine bark: deep plates
+  }else if(mode<1.5){ // pine bark: scaly plates split by deep fissures
     float w=fbm(uv,vec2(4.,3.),3);
-    float pl=worley(uv*vec2(1.,.35)+vec2(w*.08,0.),vec2(9.,3.));
-    float r=1.-abs(2.*fbm(uv+vec2(w*.06,0.),vec2(14.,2.),4)-1.);
-    return smoothstep(.05,.5,pl)*.55+pow(r,1.5)*.3+fbm(uv,vec2(40.,8.),3)*.15;
+    vec2 q=uv+vec2(w*.07,0.);
+    float pl=smoothstep(.02,.2,wedge(q,vec2(7.,3.)));
+    float pl2=smoothstep(.02,.3,wedge(q+.37,vec2(16.,7.)));
+    float lay=fbm(q,vec2(12.,28.),4);lay=floor(lay*6.)/6.*.6+lay*.4;
+    return pl*(.3+.25*pl2+.4*lay)+fbm(uv,vec2(48.,16.),3)*.08;
   }else if(mode<2.5){ // sawn timber
     float g=fbm(uv,vec2(56.,3.),4);
     float crack=smoothstep(.66,.74,fbm(uv+.3,vec2(26.,1.),2));
     return g*.75+.25-crack*.5;
+  }else if(mode>3.5){ // two twisted wire strands
+    return abs(sin(3.14159*(uv.x*2.+uv.y*6.)));
   }else{ // forest litter
     float nd=max(needles(uv,28.,0.),max(needles(uv,41.,7.)*.9,needles(uv,19.,3.)*.8));
     return fbm(uv,vec2(4.),5)*.38+nd*.62;
@@ -137,9 +144,10 @@ float H(vec2 uv){
 }
 vec3 C(vec2 uv,float h){
   if(mode<1.5){
-    vec3 c=mix(vec3(.022,.017,.014),vec3(.2,.12,.085),h);
-    c=mix(c,vec3(.16,.15,.14),.4*smoothstep(.55,.75,fbm(uv+.2,vec2(3.,2.),3)));
-    return mix(c,vec3(.06,.09,.05),.35*smoothstep(.55,.7,fbm(uv+.6,vec2(5.,4.),3)));
+    vec3 c=mix(vec3(.014,.011,.009),mix(vec3(.17,.085,.05),vec3(.3,.22,.17),fbm(uv+.2,vec2(6.,4.),4)),smoothstep(.12,.6,h));
+    c*=.7+.5*fbm(uv+.4,vec2(3.,2.),3);
+    c=mix(c,vec3(.2,.21,.19),.3*smoothstep(.6,.78,fbm(uv+.9,vec2(9.,6.),3)));
+    return mix(c,vec3(.05,.09,.035),.45*smoothstep(.55,.7,fbm(uv+.6,vec2(5.,4.),3))*smoothstep(.3,.6,h));
   }
   vec3 c=mix(vec3(.04,.032,.026),vec3(.2,.165,.125),smoothstep(.2,.8,h));
   return c*(.6+.6*fbm(uv+.4,vec2(4.,2.),3));
@@ -168,7 +176,8 @@ function bake(mode, kind, size){
 }
 const TS = LOW ? 512 : 1024;
 const tMud = bake(0, 0, LOW ? 1024 : 2048), tLit = bake(3, 0, LOW ? 1024 : 2048);
-const tBarkN = bake(1, 0, TS), tBarkC = bake(1, 1, TS);
+const tBarkN = bake(1, 0, TS*2), tBarkC = bake(1, 1, TS*2);
+const tWireN = bake(4, 0, 256);
 const tWoodN = bake(2, 0, TS), tWoodC = bake(2, 1, TS);
 
 /* ----------------------------------------------- foliage textures (canvas) */
@@ -176,30 +185,67 @@ function canvasTex(w, h, draw){
   const cv=document.createElement('canvas'); cv.width=w; cv.height=h; const c=cv.getContext('2d'); c.lineCap='round'; draw(c);
   const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=MAXANISO; return t;
 }
-const tPine = canvasTex(512, 256, c => {
-  const needle=(x,y,a,l)=>{const g=44+rnd()*38|0;c.strokeStyle=ink(16+rnd()*20|0,g,26+rnd()*20|0,1);c.lineWidth=1.7;
-    c.beginPath();c.moveTo(x,y);c.lineTo(x+Math.cos(a)*l,y+Math.sin(a)*l);c.stroke()};
-  const twig=(x0,y0,a,len,w)=>{
-    for(let s=2;s<len;s+=1.7){const x=x0+Math.cos(a)*s,y=y0+Math.sin(a)*s;needle(x,y,a+rr(.3,1.3),rr(6,12));needle(x,y,a-rr(.3,1.3),rr(6,12))}
-    c.strokeStyle=ink(52,36,24,1);c.lineWidth=w;c.beginPath();c.moveTo(x0,y0);c.lineTo(x0+Math.cos(a)*len,y0+Math.sin(a)*len);c.stroke()};
-  for(let i=0;i<17;i++)for(const sd of[-1,1]){const sx=10+i*28+rr(-9,9),a=sd*rr(.45,1.05),len=(112-i*4.6)*rr(.6,1.08);
-    for(let k=1;k<4;k++){const s=len*k/4;twig(sx+Math.cos(a)*s,128+Math.sin(a)*s,a+(k%2?1:-1)*rr(.5,.9),len*rr(.22,.38),1.5)}
-    twig(sx,128,a,len,2.2)}
-  twig(0,128,0,505,5);
+// tapered curved blade from base (x0,y0) to tip (x1,y1), optionally with a midrib
+function blade(c, x0, y0, x1, y1, bend, w, col0, col1, rib){
+  const mx=(x0+x1)/2+bend, my=(y0+y1)/2, dx=x1-x0, dy=y1-y0, l=Math.hypot(dx,dy), nx=-dy/l*w, ny=dx/l*w;
+  const g=c.createLinearGradient(x0,y0,x1,y1); g.addColorStop(0,col0); g.addColorStop(1,col1);
+  c.fillStyle=g; c.beginPath(); c.moveTo(x0-nx,y0-ny); c.quadraticCurveTo(mx-nx*.7,my-ny*.7,x1,y1); c.quadraticCurveTo(mx+nx*.7,my+ny*.7,x0+nx,y0+ny); c.closePath(); c.fill();
+  if(rib){c.strokeStyle=rib;c.lineWidth=1;c.beginPath();c.moveTo(x0,y0);c.quadraticCurveTo(mx,my,x1,y1);c.stroke()}
+}
+function leafShape(c, x, y, a, L, W, g){
+  c.save(); c.translate(x,y); c.rotate(a);
+  const gr=c.createLinearGradient(0,-W,0,W); gr.addColorStop(0,ink(g*.3|0,g*.8|0,g*.3|0,1)); gr.addColorStop(.5,ink(g*.4|0,g|0,g*.36|0,1)); gr.addColorStop(1,ink(g*.26|0,g*.66|0,g*.26|0,1));
+  c.fillStyle=gr; c.beginPath(); c.moveTo(0,0); c.bezierCurveTo(L*.25,-W,L*.7,-W*.8,L,0); c.bezierCurveTo(L*.7,W*.8,L*.25,W,0,0); c.fill();
+  c.strokeStyle=ink(g*.55|0,g*1.25|0,g*.5|0,.9); c.lineWidth=1.6; c.beginPath(); c.moveTo(0,0); c.lineTo(L*.96,0); c.stroke();
+  c.lineWidth=.9; for(let k=1;k<7;k++){const vx=L*k/7.5, vw=W*.62*Math.sin(Math.PI*k/7.5);
+    for(const e of[-1,1]){c.beginPath();c.moveTo(vx,0);c.quadraticCurveTo(vx+L*.07,e*vw*.6,vx+L*.13,e*vw);c.stroke()}}
+  c.restore();
+}
+const tPine = canvasTex(1024, 512, c => {
+  const needle=(x,y,a,l,lit)=>{const g=(lit?62:30)+rnd()*34|0;c.strokeStyle=ink(g*.42|0,g,g*.52+8|0,1);c.lineWidth=lit?2.1:2.8;
+    c.beginPath();c.moveTo(x,y);c.quadraticCurveTo(x+Math.cos(a)*l*.5+rr(-2,2),y+Math.sin(a)*l*.5+rr(-2,2),x+Math.cos(a)*l,y+Math.sin(a)*l);c.stroke()};
+  const twig=(x0,y0,a,len,w,lit)=>{
+    for(let s=3;s<len;s+=lit?2.6:3.4){const x=x0+Math.cos(a)*s,y=y0+Math.sin(a)*s;needle(x,y,a+rr(.3,1.25),rr(13,24),lit);needle(x,y,a-rr(.3,1.25),rr(13,24),lit)}
+    if(lit){c.strokeStyle=ink(58,40,27,1);c.lineWidth=w;c.beginPath();c.moveTo(x0,y0);c.lineTo(x0+Math.cos(a)*len,y0+Math.sin(a)*len);c.stroke()}};
+  const tw=[]; for(let i=0;i<17;i++)for(const sd of[-1,1]){const sx=20+i*56+rr(-18,18), a=sd*rr(.45,1.05), len=(224-i*9.2)*rr(.6,1.08);
+    for(let k=1;k<4;k++){const s=len*k/4;tw.push([sx+Math.cos(a)*s,256+Math.sin(a)*s,a+(k%2?1:-1)*rr(.5,.9),len*rr(.22,.38),3])}
+    tw.push([sx,256,a,len,4.5])}
+  tw.push([0,256,0,1010,10]);
+  // shadowed under-layer first, lit needles on top
+  for(const lit of[false,true])for(const t of tw)twig(t[0],t[1],t[2],t[3],t[4],lit);
 });
-const tFern = canvasTex(512, 160, c => {
-  for(let i=0;i<36;i++){const x=18+i*13.4, len=72*Math.pow(Math.sin(Math.PI*(i+4)/42),.7);
-    for(const sd of[-1,1]){const g=62+rnd()*36|0;c.fillStyle=ink(22+rnd()*18|0,g,22+rnd()*16|0,1);
-      c.beginPath();c.moveTo(x-5,80);c.quadraticCurveTo(x-3,80+sd*len*.6,x+9,80+sd*len);c.quadraticCurveTo(x+9,80+sd*len*.5,x+6,80);c.closePath();c.fill();
-      c.strokeStyle=ink(20,52,22,1);c.lineWidth=1;c.beginPath();c.moveTo(x,80);c.lineTo(x+8,80+sd*len*.92);c.stroke()}}
-  c.strokeStyle=ink(40,58,26,1);c.lineWidth=3.5;c.beginPath();c.moveTo(0,80);c.lineTo(505,80);c.stroke();
+const tFern = canvasTex(1024, 320, c => {
+  for(let i=0;i<40;i++){const x=30+i*24.5, len=148*Math.pow(Math.sin(Math.PI*(i+5)/47),.7);
+    for(const sd of[-1,1]){const a=sd*(1.25-.012*i)+rr(-.06,.06), ca=Math.cos(a), sa=Math.sin(a), g0=56+rnd()*34;
+      for(let s=4;s<len;s+=5.5){const t=s/len, r=(1-t*.85)*9.5, px=x+ca*s, py=160+sa*s, g=g0*(.75+.5*t);
+        for(const e of[-1,1]){c.fillStyle=ink(g*.36|0,g|0,g*.3|0,1);c.beginPath();c.ellipse(px-sa*e*r*.6+ca*2,py+ca*e*r*.6+sa*2,r,r*.42,a+e*1.05,0,6.2832);c.fill()}}
+      c.strokeStyle=ink(30,58,24,1);c.lineWidth=1.6;c.beginPath();c.moveTo(x,160);c.lineTo(x+ca*len*.95,160+sa*len*.95);c.stroke()}}
+  c.strokeStyle=ink(52,62,30,1);c.lineWidth=6;c.beginPath();c.moveTo(0,160);c.lineTo(1010,160);c.stroke();
 });
-const tLeaf = canvasTex(512, 256, c => {
-  c.strokeStyle=ink(44,36,26,1);c.lineWidth=4;c.beginPath();c.moveTo(0,128);c.lineTo(480,128);c.stroke();
-  for(let i=0;i<34;i++){const x=16+i*14, sd=i%2?1:-1, a=sd*rr(.6,1.2), L=rr(34,62)*(1-i*.012), w=L*rr(.34,.46);
-    const cx=x+Math.cos(a)*L*.55, cy=128+Math.sin(a)*L*.55, g=50+rnd()*40|0;
-    c.fillStyle=ink(16+rnd()*18|0,g,20+rnd()*16|0,1);c.beginPath();c.ellipse(cx,cy,L*.5,w*.5,a,0,6.2832);c.fill();
-    c.strokeStyle=ink(34,74,34,.9);c.lineWidth=1.2;c.beginPath();c.moveTo(x,128);c.lineTo(x+Math.cos(a)*L,128+Math.sin(a)*L);c.stroke()}
+const tLeaf = canvasTex(1024, 512, c => {
+  c.strokeStyle=ink(48,38,27,1);c.lineWidth=7;c.beginPath();c.moveTo(0,256);c.lineTo(960,256);c.stroke();
+  for(let i=0;i<30;i++){const x=30+i*31, sd=i%2?1:-1, a=sd*rr(.55,1.15), L=rr(110,170)*(1-i*.012);
+    leafShape(c,x,256,a,L,L*rr(.2,.27),50+rnd()*40)}
+  leafShape(c,950,256,0,70,16,70);
+});
+// grass atlas: four tufts side by side, roots on the bottom edge
+const tGrass = canvasTex(1024, 512, c => {
+  for(let v=0;v<4;v++){const cx=v*256+128, n=46+v*6;
+    c.save(); c.beginPath(); c.rect(v*256+2,0,252,512); c.clip();
+    for(let k=0;k<n;k++){ // back blades first (darker), front blades last
+      const depth=k/n, bx=cx+rr(-30,30), h=rr(170,470)*(.55+.45*depth)*(v===3?.75:1), lean=rr(-1,1)*h*.2, dry=rnd()<.16;
+      const g=34+depth*40+rnd()*18;
+      blade(c,bx,512,bx+lean,512-h,lean*rr(-.35,.1),rr(3.2,6.5),
+        dry?ink(58,48,26,1):ink(g*.16|0,g*.34|0,g*.1|0,1), dry?ink(128,108,62,1):ink(g*.55|0,g*.9|0,g*.34|0,1),
+        dry?null:ink(g*.66|0,g*1.02|0,g*.42|0,.5));
+    }
+    for(let k=0;k<3;k++){ // seed heads
+      const bx=cx+rr(-36,36), h=rr(380,500), lean=rr(-60,60);
+      blade(c,bx,512,bx+lean,512-h,0,1.6,ink(46,50,26,1),ink(112,98,60,1));
+      for(let j=0;j<16;j++){const t=1-j*.012;c.fillStyle=ink(118,102,62,1);c.beginPath();c.ellipse(bx+lean*t+(j%2?2.2:-2.2),512-h*t,3.6,1.7,(j%2?-1:1)*1.1,0,6.2832);c.fill()}
+    }
+    c.restore();
+  }
 });
 const tGlow = canvasTex(128, 128, c => {const g=c.createRadialGradient(64,64,0,64,64,64);
   g.addColorStop(0,ink(255,255,255,1));g.addColorStop(.25,ink(255,255,255,.35));g.addColorStop(1,ink(255,255,255,0));c.fillStyle=g;c.fillRect(0,0,128,128)});
@@ -308,40 +354,48 @@ function beam(len, w, d){
 }
 const barkG=[], woodG=[], steelG=[], wireG=[], insG=[], signG=[];
 const F={p:[],n:[],u:[],i:[]};   // pine foliage cards
-function card(P, ox, oz, L, up, droop, hw, vert){
-  const sx=-oz, sz=ox, base=F.p.length/3, S=3;
+function card(P, ox, oz, L, up, droop, hw, fin){ // fin: vertical card; otherwise a shallow inverted-V spray
+  const sx=-oz, sz=ox, base=F.p.length/3, S=3, cols=fin?2:3;
   for(let s=0;s<=S;s++){const t=s/S, cx=P.x+ox*L*t, cz=P.z+oz*L*t, cy=P.y+L*(up*t-droop*t*t);
-    for(const e of[-1,1]){
-      if(vert){F.p.push(cx,cy+e*hw,cz);F.n.push(sx*.5,.8,sz*.5)}
-      else{F.p.push(cx+sx*hw*e,cy,cz+sz*hw*e);F.n.push(ox*.3,.95,oz*.3)}
-      F.u.push(t,e>0?1:0)}}
-  for(let s=0;s<S;s++){const a=base+s*2;F.i.push(a,a+1,a+2,a+1,a+3,a+2)}
+    for(let k=0;k<cols;k++){const e=fin?k*2-1:k-1;
+      if(fin){F.p.push(cx,cy+e*hw,cz);F.n.push(sx*.5,.8,sz*.5)}
+      else{F.p.push(cx+sx*hw*e,cy-Math.abs(e)*hw*.28,cz+sz*hw*e);F.n.push(ox*.3+sx*e*.45,.9,oz*.3+sz*e*.45)}
+      F.u.push(t,(e+1)/2)}}
+  for(let s=0;s<S;s++)for(let k=0;k<cols-1;k++){const a=base+s*cols+k, b=a+cols;F.i.push(a,a+1,b,a+1,b+1,b)}
 }
 
 /* ------------------------------------------------------------------- trees */
 const trunks=[];
 function pine(x, z, near){
-  const h=rr(15,25), r=rr(.17,.3)*(h/20), seed=rnd()*100, la=rnd()*6.283, lean=rr(0,.05);
-  const n=near?16:6, y0=landY(x,z)-.4, pts=[];
+  const h=rr(15,25), r=rr(.17,.3)*(h/20), seed=rnd()*100, la=rnd()*6.283, lean=rr(0,.05), lob=3+Math.floor(rnd()*3);
+  const n=near?26:6, RS=near?14:5, y0=landY(x,z)-.4, pts=[];
   for(let j=0;j<=n;j++){const y=j/n*(h+.4);
     pts.push(new V3(x+Math.cos(la)*y*lean+(vnoise(seed,y*.2)-.5)*r*2.2*(y/h), y0+y, z+Math.sin(la)*y*lean+(vnoise(seed+31,y*.2)-.5)*r*2.2*(y/h)))}
-  barkG.push(tubeGeo(pts,{RS:near?10:5,uRep:2,vScale:.4,
-    rad:t=>r*(1-.82*t)*(1+.55*Math.exp(-t*h/.5)),
-    jit:near?(j,i)=>1+(vnoise(i*1.7+seed,j*.6)-.5)*.3:null}));
+  // root flare with buttress lobes at the base
+  barkG.push(tubeGeo(pts,{RS,uRep:2,vScale:.9,
+    rad:t=>r*(1-.82*t)*(1+.6*Math.exp(-t*h/.45)),
+    jit:near?(j,i)=>1+(vnoise(i*1.7+seed,j*.6)-.5)*.2+.2*Math.sin(i/RS*6.2832*lob+seed)*Math.exp(-j/n*h/.7):null}));
   const at=t=>{const f=Math.min(n-1e-4,t*n), j=Math.floor(f);return pts[j].clone().lerp(pts[j+1],f-j)};
   const c0=rr(.42,.6);
   if(near)for(let b=0,nb=Math.floor(rr(4,10));b<nb;b++){ // dead stubs below the canopy
     const t=rr(.12,c0), P=at(t), a=rnd()*6.283, L=rr(.3,1.5), r0=r*(1-.82*t)*rr(.16,.3), bp=[];
     for(let k=0;k<=3;k++){const s=k/3;bp.push(new V3(P.x+Math.cos(a)*L*s,P.y+L*s*rr(-.25,.15)-.2*L*s*s,P.z+Math.sin(a)*L*s))}
-    barkG.push(tubeGeo(bp,{RS:4,vScale:.8,rad:t=>r0*(1-t)+.006}));
+    barkG.push(tubeGeo(bp,{RS:5,uRep:1,vScale:.9,rad:t=>r0*(1-t)+.006}));
   }
   const whorls=near?Math.floor(h*(1-c0)/.5):10, sc=h/20;
   for(let w=0;w<whorls;w++){
     const t=c0+(1-c0)*(w+rnd()*.6)/whorls, prof=1-(t-c0)/(1-c0), P=at(Math.min(t,.985));
     const nb=near?4+Math.floor(rnd()*3):4;
-    for(let b=0;b<nb;b++){const a=rnd()*6.283, L=(.8+2.5*Math.pow(prof,.75))*rr(.7,1.15)*sc;
+    for(let b=0;b<nb;b++){const a=rnd()*6.283, ox=Math.cos(a), oz=Math.sin(a), L=(.8+2.5*Math.pow(prof,.75))*rr(.7,1.15)*sc;
       const up=.42-.34*prof, dr=.1+.2*prof, hw=L*(near?.3:.4);
-      card(P,Math.cos(a),Math.sin(a),L,up,dr,hw,false); card(P,Math.cos(a),Math.sin(a),L,up,dr,hw*.4,true)}
+      card(P,ox,oz,L,up,dr,hw,false); card(P,ox,oz,L,up,dr,hw*.4,true);
+      if(near){ // woody branch under the needles, plus two side sprays
+        const bp=[]; for(let k=0;k<=3;k++){const s=k/3*.8;bp.push(new V3(P.x+ox*L*s,P.y+L*(up*s-dr*s*s)-.02,P.z+oz*L*s))}
+        barkG.push(tubeGeo(bp,{RS:4,uRep:1,vScale:.9,rad:tt=>(.012+.028*prof)*sc*(1-.75*tt)+.004}));
+        for(const sd of[-1,1]){const s=rr(.3,.6), a2=a+sd*rr(.6,1), L2=L*rr(.4,.6);
+          card(new V3(P.x+ox*L*s,P.y+L*(up*s-dr*s*s),P.z+oz*L*s),Math.cos(a2),Math.sin(a2),L2,up*.6-.1,dr+.1,L2*.3,false)}
+      }
+    }
   }
   const top=at(.93); for(let b=0;b<3;b++){const a=b*2.1+rnd();card(top,Math.cos(a)*.3,Math.sin(a)*.3,1.7*sc,2.6,.3,.38*sc,true)}
   trunks.push([x,z,r+.25]);
@@ -349,7 +403,7 @@ function pine(x, z, near){
 function limb(P, dir, len, r, depth){
   const pts=[P.clone()], d=dir.clone(), seg=5; let Qp=P.clone();
   for(let k=1;k<=seg;k++){d.x+=rr(-.18,.18);d.z+=rr(-.18,.18);d.y+=rr(-.05,.12);d.normalize();Qp=Qp.clone().addScaledVector(d,len/seg);pts.push(Qp)}
-  barkG.push(tubeGeo(pts,{RS:depth<2?7:4,uRep:depth<2?2:1,vScale:.5,rad:t=>Math.max(.006,r*(1-.42*t))}));
+  barkG.push(tubeGeo(pts,{RS:depth<2?9:5,uRep:depth<2?2:1,vScale:.9,rad:t=>Math.max(.006,r*(1-.42*t))}));
   if(depth>=4) return;
   const k=depth===0?3+Math.floor(rnd()*2):2+(rnd()<.45?1:0);
   for(let c=0;c<k;c++){const from=c===0?pts[seg]:pts[2+Math.floor(rnd()*3)];
@@ -366,7 +420,7 @@ for(let i=0,made=0;i<2600&&made<(LOW?520:860);i++){
   const a=rnd()*6.283, d=3+Math.sqrt(rnd())*104, x=Math.cos(a)*d, z=Math.sin(a)*d;
   if(!treeOK(x,z)) continue;
   if(trunks.some(t=>Math.abs(t[0]-x)<2.2&&Math.abs(t[1]-z)<2.2)) continue;
-  pine(x,z,d<46); made++;
+  pine(x,z,d<40); made++;
 }
 for(let i=0,made=0;i<200&&made<26;i++){
   const x=rr(-70,70), sd=rnd()<.5?-1:1, z=fenceZ(x)+(sd<0?rr(-13,-8):rr(12.5,17));
@@ -379,18 +433,18 @@ const WR=.006, barbM=[], dropM=[], HV=[];
 function strand(ax, ay, az, bx, by, bz, barbed, near){
   const len=Math.hypot(bx-ax,bz-az), sag=len*.012*rr(.5,1.7), pts=[];
   const at=t=>new V3(ax+(bx-ax)*t,ay+(by-ay)*t-sag*4*t*(1-t),az+(bz-az)*t);
-  for(let k=0;k<=6;k++)pts.push(at(k/6));
-  wireG.push(tubeGeo(pts,{RS:4,rad:()=>WR}));
+  const N=near?10:5; for(let k=0;k<=N;k++)pts.push(at(k/N));
+  wireG.push(tubeGeo(pts,{RS:near?6:4,uRep:1,vScale:5,rad:()=>WR}));
   if(!near) return;
   const yaw=Math.atan2(-(bz-az),bx-ax);
-  if(barbed)for(let s=rr(0,.1);s<len;s+=rr(.1,.135)){const P=at(s/len);barbM.push([P.x,P.y,P.z,rnd()*6.283,yaw])}
+  if(barbed)for(let s=rr(0,.1);s<len;s+=rr(.11,.15)){const P=at(s/len);barbM.push([P.x,P.y,P.z,rnd()*6.283,yaw])}
   for(let k=0;k<len*2.2;k++){const P=at(rnd());dropM.push([P.x,P.y-.009,P.z])}
 }
 function dangle(ax, ay, az, dx, dz, len){
   const pts=[], s0=rnd()*50, side=rr(-.6,.6);
   for(let k=0;k<=10;k++){const s=k/10, x=ax+dx*len*s-dz*side*s*s, z=az+dz*len*s+dx*side*s*s, g=landY(x,z)+.02;
     pts.push(new V3(x,Math.max(g,ay-(ay-g)*Math.pow(Math.min(1,s*1.7),1.4)+.14*Math.sin(s*9+s0)*s*(1-s)),z))}
-  wireG.push(tubeGeo(pts,{RS:4,rad:()=>WR}));
+  wireG.push(tubeGeo(pts,{RS:5,uRep:1,vScale:5,rad:()=>WR}));
 }
 function span(A, B, hA, hB, zo, barbed, near, cut){
   if(cut){const dx=B[0]-A[0], dz=B[2]-A[2], l=Math.hypot(dx,dz);
@@ -405,7 +459,7 @@ function coil(ax, az, bx, bz, R, hand, phase){
     const R2=R*(.86+.3*vnoise(k*.11+s0,3)), lat=Math.cos(th)*R2, up=Math.sin(th)*R2, jx=(vnoise(k*.05+s0,9)-.5)*.3;
     pts.push(new V3(x-dz*(lat+jx),landY(x,z)+R*.82+up*(.9-.25*vnoise(s*len*.3+s0,5)),z+dx*(lat+jx)));
   }
-  wireG.push(tubeGeo(pts,{RS:4,rad:()=>WR}));
+  wireG.push(tubeGeo(pts,{RS:5,uRep:1,vScale:5,rad:()=>WR}));
 }
 const insBase=new THREE.LatheGeometry([[.012,0],[.03,.008],[.03,.02],[.016,.026],[.03,.034],[.03,.046],[.016,.052],[.03,.06],[.03,.072],[.012,.08],[0,.08]].map(p=>new THREE.Vector2(p[0],p[1])),8);
 const cutAt=x=>Math.abs(x-pathX(fenceZ(x)))<2.7;
@@ -421,7 +475,7 @@ const cutAt=x=>Math.abs(x-pathX(fenceZ(x)))<2.7;
       const b=new THREE.PlaneGeometry(.34,.43); xform(b,px,py+1.78,pz-.045,0,Math.PI,0); signG.push(b);
     }
   }
-  for(let i=0;i<P.length-1;i++){const A=P[i], B=P[i+1], mx=(A[0]+B[0])/2, near=Math.abs(mx)<56, cut=cutAt(mx);
+  for(let i=0;i<P.length-1;i++){const A=P[i], B=P[i+1], mx=(A[0]+B[0])/2, near=Math.abs(mx)<44, cut=cutAt(mx);
     HS.forEach((h,k)=>span(A,B,h,h,k%2?.105:.045,!(k%2),near,cut&&k<5));
     for(const d of[.22,.46,.7])strand(A[0],A[1]+2.5+d*.707,A[2]-d*.707,B[0],B[1]+2.5+d*.707,B[2]-d*.707,true,near);
   }
@@ -432,7 +486,7 @@ for(const off of[-4.6,4.6]){ // flanking aprons on timber stakes
     const px=x+rr(-.2,.2), pz=fenceZ(px)+off+rr(-.12,.12), py=landY(px,pz), tx=rr(-.09,.09), tz=rr(-.09,.09); P.push([px+tx*.8,py,pz+tz*.8]);
     woodG.push(tubeGeo([new V3(px-tx*.2,py-.35,pz-tz*.2),new V3(px+tx*.5,py+.7,pz+tz*.5),new V3(px+tx,py+1.72,pz+tz)],{RS:7,cap:true,vScale:.5,rad:t=>.062-.012*t,jit:(j,i)=>.9+.2*h2(i,j+Math.round(px*7))}));
   }
-  for(let i=0;i<P.length-1;i++){const A=P[i], B=P[i+1], mx=(A[0]+B[0])/2, near=Math.abs(mx)<56, cut=cutAt(mx);
+  for(let i=0;i<P.length-1;i++){const A=P[i], B=P[i+1], mx=(A[0]+B[0])/2, near=Math.abs(mx)<44, cut=cutAt(mx);
     HS.forEach(h=>span(A,B,h,h,0,true,near,cut));
     if(!cut){span(A,B,.3,1.45,0,true,near,false);span(A,B,1.45,.3,0,true,near,false)}
   }
@@ -551,7 +605,7 @@ const NS = new THREE.Vector2(1.5, 1.5);
 const barkMat = new THREE.MeshStandardMaterial({map:tBarkC, normalMap:tBarkN, normalScale:NS, roughness:.6});
 const woodMat = new THREE.MeshStandardMaterial({map:tWoodC, normalMap:tWoodN, normalScale:NS, roughness:.5});
 const steelMat = new THREE.MeshStandardMaterial({color:C3(.07,.05,.04), normalMap:tWoodN, roughness:.5, metalness:.6, side:THREE.DoubleSide});
-const wireMat = new THREE.MeshStandardMaterial({color:C3(.16,.16,.17), roughness:.35, metalness:.9});
+const wireMat = new THREE.MeshStandardMaterial({color:C3(.2,.19,.18), roughness:.38, metalness:.85, normalMap:tWireN, normalScale:new THREE.Vector2(1.3,1.3)});
 const insMat = new THREE.MeshStandardMaterial({color:C3(.13,.055,.035), roughness:.22, metalness:0});
 const signMat = new THREE.MeshStandardMaterial({map:tSign, roughness:.35, metalness:.25});
 function addMerged(list, mat, cast=true){
@@ -561,7 +615,7 @@ function addMerged(list, mat, cast=true){
 addMerged(barkG, barkMat); addMerged(woodG, woodMat); addMerged(steelG, steelMat); addMerged(insG, insMat, false); addMerged(signG, signMat, false);
 noAO.push(addMerged(wireG, wireMat, false));
 // wind sway for foliage; "keep" stops back faces from flipping the soft up-facing normals
-function foliage(mat, amp, keep){
+function foliage(mat, amp, keep, w='uv.x'){
   mat.onBeforeCompile=sh=>{sh.uniforms.uTime=uTime;
     sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nuniform float uTime;')
       .replace('#include <begin_vertex>',`#include <begin_vertex>
@@ -571,7 +625,7 @@ vec2 swp=instanceMatrix[3].xz;
 vec2 swp=position.xz;
 #endif
 float sw=sin(uTime*1.6+swp.x*.5+swp.y*.37)*.6+sin(uTime*3.3+swp.x*1.3+position.y*.4)*.4;
-transformed.xz+=vec2(1.,.3)*sw*uv.x*uv.x*${amp.toFixed(3)};`);
+transformed.xz+=vec2(1.,.3)*sw*${w}*${w}*${amp.toFixed(3)};`);
     if(keep)sh.fragmentShader=sh.fragmentShader.replace('#include <normal_fragment_begin>','#include <normal_fragment_begin>\n#ifdef DOUBLE_SIDED\nnormal*=faceDirection;\n#endif');
   };
   return mat;
@@ -612,18 +666,17 @@ scatter(clusterGeo(9,.34,false),foliage(new THREE.MeshStandardMaterial({map:tFer
   LOW?450:1400,58,(x,z)=>tPath<.12&&offLine(x,z)&&fbm(x*.07+9,z*.07,2)>.44,.6,1.5,true);
 scatter(clusterGeo(11,.46,true),foliage(new THREE.MeshStandardMaterial({map:tLeaf,alphaTest:.4,alphaToCoverage:true,side:THREE.DoubleSide,roughness:.3}),.05,true),
   LOW?90:260,60,(x,z)=>tPath<.08&&offLine(x,z)&&!trunks.some(t=>Math.abs(t[0]-x)<.6&&Math.abs(t[1]-z)<.6)&&fbm(x*.05+70,z*.05,2)>.5,.6,1.3,true);
-{ // grass tufts: real blades, darker at the base
-  const p=[], nn=[], u=[], c=[], ix=[], S=3;
-  for(let b=0;b<12;b++){const a=rnd()*6.283, br=rnd()*.09, bx=Math.cos(a)*br, bz=Math.sin(a)*br, da=rnd()*6.283, dx=Math.cos(da), dz=Math.sin(da);
-    const hgt=rr(.22,.6), lean=rr(.15,.75), w=rr(.007,.013), k0=p.length/3;
-    for(let s=0;s<=S;s++){const t=s/S, cx=bx+dx*lean*t*t*hgt, cz=bz+dz*lean*t*t*hgt, cy=hgt*t*(1-.15*t), hw=w*(1-t*.96);
-      for(const e of[-1,1]){p.push(cx-dz*hw*e,cy,cz+dx*hw*e);nn.push(dx*.3,.9,dz*.3);u.push(t,t);
-        c.push(.012+.085*t,.022+.125*t,.008+.035*t)}}
+{ // grass: textured tuft cards crossed at four angles, one atlas tuft each
+  const p=[], nn=[], u=[], ix=[], S=3, Wd=.5, Hh=.58;
+  for(let q=0;q<4;q++){const a=q*.785+rr(-.2,.2), dx=Math.cos(a), dz=Math.sin(a), ox=rr(-.06,.06), oz=rr(-.06,.06), lean=rr(-.12,.12), k0=p.length/3;
+    for(let s=0;s<=S;s++){const t=s/S, off=lean*t*t;
+      for(const e of[-1,1]){p.push(ox+dx*Wd*.5*e-dz*off,Hh*t,oz+dz*Wd*.5*e+dx*off);nn.push(dx*e*.25,1,dz*e*.25);u.push((q+(e+1)/2)/4,t)}}
     for(let s=0;s<S;s++){const k=k0+s*2;ix.push(k,k+1,k+2,k+1,k+3,k+2)}}
   const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(p,3)); g.setAttribute('normal',new THREE.Float32BufferAttribute(nn,3));
-  g.setAttribute('uv',new THREE.Float32BufferAttribute(u,2)); g.setAttribute('color',new THREE.Float32BufferAttribute(c,3)); g.setIndex(ix);
-  scatter(g,foliage(new THREE.MeshStandardMaterial({vertexColors:true,side:THREE.DoubleSide,roughness:.42}),.08,true),
-    LOW?2600:10000,40,(x,z)=>tPath<.45&&fbm(x*.11+30,z*.11,2)>.34,.55,1.3,true);
+  g.setAttribute('uv',new THREE.Float32BufferAttribute(u,2)); g.setIndex(ix);
+  // Lambert: the faked up-facing normals would otherwise give a white grazing-angle specular sheen
+  scatter(g,foliage(new THREE.MeshLambertMaterial({map:tGrass,color:C3(2.3,2.4,2.1),alphaTest:.4,alphaToCoverage:true,side:THREE.DoubleSide}),.07,true,"uv.y"),
+    LOW?4500:12000,40,(x,z)=>tPath<.45&&fbm(x*.11+30,z*.11,2)>.3,.45,1.15,true);
 }
 { // rocks, mud clods and fallen twigs
   const g=new THREE.IcosahedronGeometry(1,2), p=g.attributes.position, seen=new Map;
@@ -640,8 +693,12 @@ scatter(clusterGeo(11,.46,true),foliage(new THREE.MeshStandardMaterial({map:tLea
   tw.receiveShadow=true; tw.frustumCulled=false; scene.add(tw); noAO.push(tw);
 }
 { // barbs and hanging rain drops on the wire
-  const b1=new THREE.CylinderGeometry(.0028,.0028,.052,4), b2=b1.clone(); b1.rotateZ(.9); b2.rotateZ(-.9); b2.rotateX(1.2);
-  const bm=new THREE.InstancedMesh(mergeGeometries([b1,b2]),wireMat,barbM.length);
+  // each barb: two turns of wire wrapped round the strand, ending in four cut points
+  const hp=[]; for(let k=0;k<=9;k++){const th=k/9*6.2832*2.2;hp.push(new V3(-.011+.022*k/9,Math.cos(th)*.0095,Math.sin(th)*.0095))}
+  const bp=[tubeGeo(hp,{RS:3,rad:()=>.0026})];
+  for(const[bx,al]of[[-.011,.5],[-.011,.5+Math.PI],[.011,2.1],[.011,2.1+Math.PI]]){
+    const cg=new THREE.ConeGeometry(.0027,.03,4,1,true); cg.translate(0,.022,0); cg.rotateX(al); cg.rotateZ(bx<0?.35:-.35); cg.translate(bx,0,0); bp.push(cg)}
+  const bm=new THREE.InstancedMesh(mergeGeometries(bp),wireMat,barbM.length);
   barbM.forEach((b,i)=>{_e.set(b[3],b[4],0,'YXZ');_q.setFromEuler(_e);_m.compose(_p.set(b[0],b[1],b[2]),_q,_s.set(1,1,1));bm.setMatrixAt(i,_m)});
   bm.frustumCulled=false; scene.add(bm); noAO.push(bm);
   const dm=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.0065,1),
@@ -651,7 +708,7 @@ scatter(clusterGeo(11,.46,true),foliage(new THREE.MeshStandardMaterial({map:tLea
 }
 
 /* ------------------------------------------------- searchlight and sparks */
-const spot=new THREE.SpotLight(C3(1,.95,.84),3600,150,.105,.55,1.5);
+const spot=new THREE.SpotLight(C3(1,.95,.84),2200,150,.105,.55,1.5);
 spot.position.copy(towerLight); scene.add(spot, spot.target);
 if(!LOW){spot.castShadow=true;spot.shadow.mapSize.set(1024,1024);spot.shadow.camera.near=2;spot.shadow.camera.far=120;spot.shadow.bias=-.0008}
 const CONE=70;
@@ -790,7 +847,7 @@ function frame(){
     else spot.castShadow=false}
   requestAnimationFrame(frame);
 }
-uTime.value=Number(Q.get("t"))||30;
+uTime.value=Number(Q.get("t"))||30; nextBolt=uTime.value+9; nextSpark=uTime.value+3;
 frame();
 document.getElementById('load').classList.add('done');
 window.__ready=true;
