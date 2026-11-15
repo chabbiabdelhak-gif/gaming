@@ -12,13 +12,20 @@ canvas:active{cursor:grabbing}
 #hud b{letter-spacing:.04em}
 #load{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:15px;letter-spacing:.2em;text-transform:uppercase;transition:opacity .8s}
 #load.done{opacity:0;pointer-events:none}
-#exp{position:fixed;right:16px;bottom:14px;padding:8px 12px;border:0;border-radius:4px;font:inherit;font-size:13px;cursor:pointer}
+#xp{position:fixed;right:16px;bottom:14px;padding:10px 12px;border-radius:4px;font-size:13px;line-height:1.5;display:flex;flex-direction:column;gap:5px;backdrop-filter:blur(3px)}
+#xp select,#xp button{font:inherit;font-size:13px}
+#xp button{padding:6px 10px;cursor:pointer}
+#xm{font-size:12px;max-width:250px}
 </style>
 </head>
 <body>
 <div id="load">La Ligne Morice</div>
 <div id="hud"><b>Level 2 · La Ligne Morice · خط موريس المكهرب · 1956</b><br>WASD / arrows to walk · Shift to run · C to crouch · drag to look</div>
-<button id="exp">Export .glb (Unreal Engine)</button>
+<div id="xp"><b>Export for Unreal Engine (.glb)</b>
+<label>Ground detail <select id="xq"><option value="2,2048">Standard · 4K</option><option value="4,2048">High · 8K</option><option value="4,4096" selected>Ultra · 16K</option></select></label>
+<label><input type="checkbox" id="xc" checked> Collision hulls (UCX_)</label>
+<label><input type="checkbox" id="xs"> Show collision</label>
+<button id="exp">Export .glb</button><div id="xm">Unreal 5.4+: enable “Import Collision According to Mesh Name”.</div></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module">
 import * as THREE from 'three';
@@ -32,7 +39,7 @@ import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 
 const ink=(r,g,b,a)=>'rgba('+[r,g,b,a].join(',')+')';
 {const L=document.getElementById('load'),U=document.getElementById('hud');document.body.style.background=L.style.background=ink(5,7,10,1);L.style.color=ink(150,160,172,1);U.style.color=ink(226,230,235,1);U.style.background=ink(6,8,12,.5)}
-{const E=document.getElementById('exp');E.style.color=ink(226,230,235,1);E.style.background=ink(6,8,12,.6)}
+{const E=document.getElementById('xp');E.style.color=ink(226,230,235,1);E.style.background=ink(6,8,12,.6)}
 const Q = new URLSearchParams(location.search);
 const LOW = Q.get('q') === 'low';
 const V3 = THREE.Vector3, C3 = (r, g, b) => new THREE.Color(r, g, b);
@@ -433,6 +440,7 @@ for(let i=0,made=0;i<200&&made<26;i++){
 
 /* ----------------------------------------------------- the electrified line */
 const WR=.006, dropM=[], HV=[], ribG=[], wireLodG=[];
+const walls=[], posts=[];   // fence spans and round posts: used for walking and exported as collision
 const TILE=.32, RW=.019;   // one texture tile (two barbs) is 32 cm of wire
 // Two crossed strips along a polyline, UVs running along the wire, for the barbed-wire texture strip.
 function ribbonGeo(pts){
@@ -501,7 +509,7 @@ const cutAt=x=>Math.abs(x-pathX(fenceZ(x)))<2.7;
     }
   }
   for(let i=0;i<P.length-1;i++){const A=P[i], B=P[i+1], mx=(A[0]+B[0])/2, near=Math.abs(mx)<44, cut=cutAt(mx);
-    HS.forEach((h,k)=>span(A,B,h,h,k%2?.105:.045,!(k%2),near,cut&&k<5));
+    HS.forEach((h,k)=>span(A,B,h,h,k%2?.105:.045,!(k%2),near,cut&&k<5)); if(!cut)walls.push([A,B,2.7,.3,'Steel']);
     for(const d of[.22,.46,.7])strand(A[0],A[1]+2.5+d*.707,A[2]-d*.707,B[0],B[1]+2.5+d*.707,B[2]-d*.707,true,near);
   }
 }
@@ -512,7 +520,7 @@ for(const off of[-4.6,4.6]){ // flanking aprons on timber stakes
     woodG.push(tubeGeo([new V3(px-tx*.2,py-.35,pz-tz*.2),new V3(px+tx*.5,py+.7,pz+tz*.5),new V3(px+tx,py+1.72,pz+tz)],{RS:7,cap:true,vScale:.5,rad:t=>.062-.012*t,jit:(j,i)=>.9+.2*h2(i,j+Math.round(px*7))}));
   }
   for(let i=0;i<P.length-1;i++){const A=P[i], B=P[i+1], mx=(A[0]+B[0])/2, near=Math.abs(mx)<44, cut=cutAt(mx);
-    HS.forEach(h=>span(A,B,h,h,0,true,near,cut));
+    HS.forEach(h=>span(A,B,h,h,0,true,near,cut)); if(!cut)walls.push([A,B,1.6,.25,'Timber']);
     if(!cut){span(A,B,.3,1.45,0,true,near,false);span(A,B,1.45,.3,0,true,near,false)}
   }
 }
@@ -536,11 +544,12 @@ const towerLight=new V3;
   for(const s of[-1,1])add(beam(7,.06,.06),s*.25,3.35,1.95,-.12,0,0);
   for(let k=0;k<14;k++){const y=.4+k*.48;add(beam(.5,.04,.04),0,y,2.36-.12*y,0,0,Math.PI/2)}
   for(const g of parts){xform(g,tx,ty,tz,0,0,0);woodG.push(g)}
+  for(const sx of[-1,1])for(const sz of[-1,1])posts.push([tx+sx*1.15,tz+sz*1.15,.14,7,'Timber']);
   const lampG=new THREE.CylinderGeometry(.2,.17,.34,12); xform(lampG,tx,ty+7.55,tz-1.62,Math.PI/2-.3,0,0); steelG.push(lampG);
   towerLight.set(tx,ty+7.55,tz-1.7);
 }
 const lampLights=LAMPS.map(([x,z])=>{
-  const y=landY(x,z);
+  const y=landY(x,z); posts.push([x,z,.1,5.2,'Timber']);
   woodG.push(tubeGeo([new V3(x,y-.4,z),new V3(x+.03,y+2.5,z),new V3(x,y+5.25,z)],{RS:7,cap:true,vScale:.4,rad:t=>.095-.03*t}));
   const arm=beam(.95,.035,.035); xform(arm,x,y+5.08,z-.42,Math.PI/2,0,0); steelG.push(arm);
   const shade=new THREE.ConeGeometry(.21,.13,12,1,true); xform(shade,x,y+5.02,z-.85,0,0,0); steelG.push(shade);
@@ -881,9 +890,8 @@ function bakeEnv(t){
 }
 
 /* ------------------------------------------------------------- glTF export */
-// Static level geometry with its base PBR textures as one .glb (metres, Y-up) for Unreal, Blender, etc.
-// Shader-driven parts have no glTF equivalent and are left out: sky, rain, mist, light beams, wind sway,
-// lights, and the terrain's mud/litter/puddle blending (the terrain ships with a flat material and tiling UVs).
+// Static level geometry with PBR texture sets and collision hulls as one .glb (metres, Y-up) for Unreal.
+// Shader-driven parts have no glTF equivalent and are left out: sky, rain, mist, light beams, wind sway, lights.
 function bakeInstances(im){
   const g=im.geometry, P=g.attributes.position, Nr=g.attributes.normal, U=g.attributes.uv, n=P.count, N=im.count, ic=g.index?g.index.count:n;
   const pos=new Float32Array(N*n*3), nor=new Float32Array(N*n*3), uv=new Float32Array(N*n*2), idx=new Uint32Array(N*ic);
@@ -908,41 +916,98 @@ function rtToCanvas(rt, max){
   c.putImageData(im,0,0); if(!max||w<=max)return cv;
   const sm=document.createElement('canvas'); sm.width=sm.height=max; sm.getContext('2d').drawImage(cv,0,0,max,max); return sm;
 }
-// The terrain's mud / needle-litter / puddle blend only exists in its shader, so it is rendered top-down
-// into one base-colour, normal and ORM texture set that maps 1:1 onto the exported terrain UVs.
-function bakeTerrain(size){
-  const rt=new THREE.WebGLRenderTarget(size,size,{depthBuffer:false}), u={tMud:{value:tMud},tLit:{value:tLit},mode:{value:0}};
+// The terrain's mud / needle-litter / puddle blend only exists in its shader, so it is baked to textures.
+// The ground is cut into T x T tiles along the terrain grid, whose spacing tightens toward the playable centre,
+// so each tile's own S x S texture set ends up at about a centimetre per texel where the player walks.
+// Image row 0 is glTF v=0; normal-map green points "up the image", as glTF expects.
+function terrainBaker(T, S){
+  const W=TN+1;
+  if(!terrainGeo.attributes.aGrid){const u=new Float32Array(W*W*2);for(let j=0;j<W;j++)for(let i=0;i<W;i++){u[(j*W+i)*2]=i/TN;u[(j*W+i)*2+1]=j/TN}
+    terrainGeo.setAttribute('aGrid',new THREE.BufferAttribute(u,2))}
+  const rt=new THREE.WebGLRenderTarget(S,S,{depthBuffer:false}), u={tMud:{value:tMud},tLit:{value:tLit},mode:{value:0},uTile:{value:new THREE.Vector4}};
   const mat=new THREE.ShaderMaterial({uniforms:u,side:THREE.DoubleSide,depthTest:false,depthWrite:false,
-    vertexShader:`attribute float aWet;attribute float aPath;varying vec2 vP;varying float vWet;varying float vPath;
-void main(){vP=position.xz;vWet=aWet;vPath=aPath;gl_Position=vec4(position.x/${TS2}.,position.z/${TS2}.,0.,1.);}`,
+    vertexShader:`attribute float aWet;attribute float aPath;attribute vec2 aGrid;uniform vec4 uTile;varying vec2 vP;varying float vWet;varying float vPath;
+void main(){vP=position.xz;vWet=aWet;vPath=aPath;vec2 l=aGrid*uTile.x-uTile.yz;gl_Position=vec4((l*(uTile.w-1.)+.5)/uTile.w*2.-1.,0.,1.);}`,
     fragmentShader:`uniform sampler2D tMud;uniform sampler2D tLit;uniform float mode;varying vec2 vP;varying float vWet;varying float vPath;
 void main(){
   vec2 tp=vP;mat2 trot=mat2(.8,.6,-.6,.8);
   vec4 m1=texture2D(tMud,tp*.31),m2=texture2D(tMud,trot*tp*2.1+.3),m3=texture2D(tMud,tp*.043+.5);
   vec4 l1=texture2D(tLit,tp*.55),l2=texture2D(tLit,trot*tp*1.3+.2);
+  vec4 m4=texture2D(tMud,trot*tp*6.7+.11),l3=texture2D(tLit,tp*2.3+.4);
   float hdM=m1.a*.5+m2.a*.3+m3.a*.2;
   float pm=smoothstep(.3,.62,vPath+(hdM-.5)*.6);
-  float hd=mix(l1.a*.6+l2.a*.4,hdM,pm);
-  vec2 dnM=(m1.rg-.5)*5.+((m2.rg-.5)*3.2)*trot+(m3.rg-.5)*3.;
-  vec2 dnL=(l1.rg-.5)*3.6+((l2.rg-.5)*2.8)*trot+(m3.rg-.5)*2.;
+  float hd=mix(l1.a*.5+l2.a*.3+l3.a*.2,hdM*.8+m4.a*.2,pm);
+  vec2 dnM=(m1.rg-.5)*5.+((m2.rg-.5)*3.2)*trot+(m3.rg-.5)*3.+((m4.rg-.5)*2.4)*trot;
+  vec2 dnL=(l1.rg-.5)*3.6+((l2.rg-.5)*2.8)*trot+(m3.rg-.5)*2.+(l3.rg-.5)*2.6;
   vec2 dn=mix(dnL,dnM,pm);
   float wd=vWet+(hdM-.47)*.11,water=smoothstep(0.,.014,wd),damp=smoothstep(-.11,0.,wd);
   vec3 mudc=mix(vec3(.12,.094,.07),vec3(.21,.165,.12),smoothstep(.42,.72,hdM));
   mudc=mix(mudc,vec3(.04,.033,.028),smoothstep(.54,.34,hdM)*.7);
   vec3 litc=mix(vec3(.026,.021,.016),vec3(.19,.115,.058),smoothstep(.34,.8,l1.a));
   litc=mix(litc,vec3(.22,.15,.08),smoothstep(.62,.92,l2.a)*.55);
+  litc=mix(litc,vec3(.3,.2,.1),smoothstep(.6,.92,l3.a)*.6);
   litc=mix(litc,vec3(.03,.058,.022),smoothstep(.56,.72,m3.a)*.65);
-  vec3 col=mix(litc,mudc,pm)*mix(1.,.6,damp)*mix(.74,1.12,smoothstep(.3,.7,hd));
+  mudc*=mix(.72,1.2,smoothstep(.3,.75,m4.a));
+  float cav=mix(.45,1.,smoothstep(.22,.7,hd));
+  vec3 col=mix(litc,mudc,pm)*mix(1.,.6,damp)*mix(.74,1.12,smoothstep(.3,.7,hd))*mix(.6,1.,cav);
   float rough=mix(mix(.72,.34,pm),mix(.5,.22,pm),damp)+(hd-.5)*.3;
-  col=mix(col,vec3(.03,.03,.028),water*smoothstep(-.02,.1,wd));rough=mix(rough,.08,water);dn*=1.-water;
+  col=mix(col,vec3(.03,.03,.028),water*smoothstep(-.02,.1,wd));rough=mix(rough,.08,water);cav=mix(cav,1.,water);dn*=1.-water;
   if(mode<.5)gl_FragColor=vec4(pow(max(col,0.),vec3(1./2.2)),1.);
-  else if(mode<1.5)gl_FragColor=vec4(normalize(vec3(dn,1.))*.5+.5,1.);
-  else gl_FragColor=vec4(1.,clamp(rough,.08,1.),0.,1.);
+  else if(mode<1.5)gl_FragColor=vec4(normalize(vec3(dn.x,-dn.y,1.))*.5+.5,1.);
+  else gl_FragColor=vec4(cav,clamp(rough,.08,1.),0.,1.);
 }`});
   const sc=new THREE.Scene(), me=new THREE.Mesh(terrainGeo,mat); me.frustumCulled=false; sc.add(me);
-  const out=[]; for(let k=0;k<3;k++){u.mode.value=k;renderer.setRenderTarget(rt);renderer.render(sc,bakeCam);out.push(rtToCanvas(rt))}
-  renderer.setRenderTarget(null); rt.dispose(); mat.dispose(); return out;
+  const px=new Uint8Array(S*S*4), cv=document.createElement('canvas'); cv.width=cv.height=S; const c=cv.getContext('2d');
+  return {
+    async tile(ti, tj, mode){
+      u.uTile.value.set(T,ti,tj,S); u.mode.value=mode;
+      renderer.setRenderTarget(rt); renderer.render(sc,bakeCam); renderer.readRenderTargetPixels(rt,0,0,S,S,px); renderer.setRenderTarget(null);
+      c.putImageData(new ImageData(new Uint8ClampedArray(px.buffer),S,S),0,0);
+      return new Promise(r=>cv.toBlob(r,'image/jpeg',mode===1?.95:.9));   // kept compressed: a full set of raw tiles would not fit in memory
+    },
+    dispose(){rt.dispose();mat.dispose()}
+  };
 }
+function terrainTileGeo(T, ti, tj, S){
+  const W=TN+1, n=TN/T, m=n+1, P=terrainGeo.attributes.position, Nr=terrainGeo.attributes.normal;
+  const pos=new Float32Array(m*m*3), nor=new Float32Array(m*m*3), uv=new Float32Array(m*m*2), idx=new Uint32Array(n*n*6);
+  for(let b=0;b<m;b++)for(let a=0;a<m;a++){const src=(tj*n+b)*W+ti*n+a, k=b*m+a;
+    pos[k*3]=P.getX(src);pos[k*3+1]=P.getY(src);pos[k*3+2]=P.getZ(src); nor[k*3]=Nr.getX(src);nor[k*3+1]=Nr.getY(src);nor[k*3+2]=Nr.getZ(src);
+    uv[k*2]=(a/n*(S-1)+.5)/S; uv[k*2+1]=(b/n*(S-1)+.5)/S}
+  let q=0; for(let b=0;b<n;b++)for(let a=0;a<n;a++){const k=b*m+a, d=k+m;idx[q++]=k;idx[q++]=d;idx[q++]=k+1;idx[q++]=k+1;idx[q++]=d;idx[q++]=d+1}
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('normal',new THREE.BufferAttribute(nor,3));
+  g.setAttribute('uv',new THREE.BufferAttribute(uv,2)); g.setIndex(new THREE.BufferAttribute(idx,1)); return g;
+}
+// Simple collision as convex pieces, each tagged with the render mesh it belongs to:
+// ground cells (about 1 m across where the player walks), trunks, posts and fence spans.
+function collisionHulls(T){
+  const out=[], BOX=[0,2,1,0,3,2,4,5,6,4,6,7,0,1,5,0,5,4,1,2,6,1,6,5,2,3,7,2,7,6,3,0,4,3,4,7];
+  const add=(owner,pts,ix)=>{const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pts,3));g.setIndex(ix);out.push({owner,geo:g})};
+  const prism=(owner,x,z,r,y0,y1)=>{const p=[], ix=[];
+    for(const y of[y0,y1])for(let k=0;k<6;k++)p.push(x+Math.cos(k*1.0472)*r,y,z+Math.sin(k*1.0472)*r);
+    for(let k=0;k<6;k++){const a=k, b=(k+1)%6;ix.push(a,b+6,b,a,a+6,b+6);if(k>0&&k<5)ix.push(0,k,k+1,6,7+k,6+k)}
+    add(owner,p,ix)};
+  const W=TN+1, P=terrainGeo.attributes.position, n=TN/T, c=Math.round(80/T);
+  for(let tj=0;tj<T;tj++)for(let ti=0;ti<T;ti++)for(let cj=0;cj<c;cj++)for(let ci=0;ci<c;ci++){
+    const i0=ti*n+Math.round(ci*n/c), i1=ti*n+Math.round((ci+1)*n/c), j0=tj*n+Math.round(cj*n/c), j1=tj*n+Math.round((cj+1)*n/c);
+    const q=[j0*W+i0,j1*W+i0,j1*W+i1,j0*W+i1], lo=Math.min(...q.map(k=>P.getY(k)))-.6, p=[];
+    for(const k of q)p.push(P.getX(k),lo,P.getZ(k)); for(const k of q)p.push(P.getX(k),P.getY(k),P.getZ(k));
+    add('Terrain_'+tj+'_'+ti,p,BOX)}
+  for(const t of trunks)prism('Bark',t[0],t[1],(t[2]-.25)*1.15,landY(t[0],t[1])-.4,landY(t[0],t[1])+6);
+  for(const q of posts)prism(q[4],q[0],q[1],q[2],landY(q[0],q[1])-.4,landY(q[0],q[1])+q[3]);
+  for(const w of walls){const A=w[0], B=w[1], ex=B[0]-A[0], ez=B[2]-A[2], l=Math.hypot(ex,ez), px=-ez/l*w[3]/2, pz=ex/l*w[3]/2;
+    const c4=[[A[0]-px,A[1],A[2]-pz],[A[0]+px,A[1],A[2]+pz],[B[0]+px,B[1],B[2]+pz],[B[0]-px,B[1],B[2]-pz]], p=[];
+    for(const v of c4)p.push(v[0],v[1]-.4,v[2]); for(const v of c4)p.push(v[0],v[1]+w[2],v[2]);
+    add(w[4],p,BOX)}
+  return out;
+}
+let colView=null;
+function showCollision(on){
+  if(on&&!colView){colView=new THREE.Mesh(mergeGeometries(collisionHulls(4).map(h=>h.geo)),new THREE.MeshBasicMaterial({color:C3(.1,1,.45),wireframe:true,transparent:true,opacity:.55,fog:false}));
+    colView.frustumCulled=false; colView.position.y=.03; scene.add(colView); noAO.push(colView)}
+  if(colView)colView.visible=on;
+}
+document.getElementById('xs').addEventListener('change',e=>showCollision(e.target.checked));
 // glTF/Unreal convention: one texture with occlusion in R, roughness in G, metallic in B
 function packORM(ao, rg, mt){
   const ref=(ao||rg||mt).image, W=ref.width, H=ref.height, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
@@ -951,19 +1016,27 @@ function packORM(ao, rg, mt){
   for(let i=0;i<W*H;i++){d[i*4]=A?A[i*4]:255;d[i*4+1]=R?R[i*4+1]:255;d[i*4+2]=M?M[i*4+2]:255;d[i*4+3]=255}
   c.putImageData(im,0,0); return cv;
 }
-// The exporter names nodes only; importers name their assets after meshes and images.
-function nameGLB(buf){
+// Final pass over the exporter's output: importers name assets after meshes and images, which the exporter leaves
+// unnamed, and the baked terrain tiles are appended here as ready-made JPEGs in place of their placeholders.
+function finishGLB(buf, baked){
   const dv=new DataView(buf), jl=dv.getUint32(12,true), j=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,20,jl)));
+  const binLen=dv.getUint32(20+jl,true), parts=[new Uint8Array(buf,28+jl,binLen)]; let off=binLen;
   for(const n of j.nodes)if(n.mesh!==undefined)j.meshes[n.mesh].name=n.name;
   for(const t of j.textures||[])if(t.name&&j.images[t.source])j.images[t.source].name=t.name;
-  const js=new TextEncoder().encode(JSON.stringify(j)), pad=(4-js.length%4)%4, bin=new Uint8Array(buf,20+jl);
-  const out=new Uint8Array(20+js.length+pad+bin.length); out.set(new Uint8Array(buf,0,20)); out.set(js,20); out.fill(32,20+js.length,20+js.length+pad); out.set(bin,20+js.length+pad);
-  const o=new DataView(out.buffer); o.setUint32(8,out.length,true); o.setUint32(12,js.length+pad,true); return out.buffer;
+  for(const im of j.images||[]){const blob=baked.get(im.name); if(!blob)continue;
+    j.bufferViews.push({buffer:0,byteOffset:off,byteLength:blob.size}); im.bufferView=j.bufferViews.length-1; im.mimeType='image/jpeg';
+    const pad=(4-blob.size%4)%4; parts.push(blob); if(pad)parts.push(new Uint8Array(pad)); off+=blob.size+pad}
+  j.buffers[0].byteLength=off;
+  const js=new TextEncoder().encode(JSON.stringify(j)), jp=(4-js.length%4)%4, head=new DataView(new ArrayBuffer(20)), bh=new DataView(new ArrayBuffer(8));
+  head.setUint32(0,0x46546C67,true); head.setUint32(4,2,true); head.setUint32(8,28+js.length+jp+off,true); head.setUint32(12,js.length+jp,true); head.setUint32(16,0x4E4F534A,true);
+  bh.setUint32(0,off,true); bh.setUint32(4,0x004E4942,true);
+  return new Blob([head,js,new Uint8Array(jp).fill(32),bh,...parts],{type:'model/gltf-binary'});
 }
-async function exportGLB(post){
-  const btn=document.getElementById('exp'); btn.textContent='Exporting...'; await new Promise(r=>setTimeout(r,60));
+async function exportGLB(opt){
+  const btn=document.getElementById('exp'), say=async t=>{btn.textContent=t;await new Promise(r=>setTimeout(r,30))};
+  btn.disabled=true; await say('Preparing...');
   const {GLTFExporter}=await import('three/addons/exporters/GLTFExporter.js');
-  const names=new Map([[terrainMat,'Terrain'],[barkMat,'Bark'],[woodMat,'Timber'],[steelMat,'Steel'],[wireMat,'Wire'],[insMat,'Insulators'],[signMat,'Signs']]);
+  const names=new Map([[barkMat,'Bark'],[woodMat,'Timber'],[steelMat,'Steel'],[wireMat,'Wire'],[insMat,'Insulators'],[signMat,'Signs']]);
   const byMap=new Map([[tPine,'PineNeedles'],[tFern,'Ferns'],[tLeaf,'Shrubs'],[tGrass,'Grass']]);
   const wait=async t=>{while(t&&!t.image)await new Promise(r=>setTimeout(r,60));return t};   // image textures may still be decoding
   const cvTex=(cv,name,srgb,jpg,src)=>{const t=new THREE.CanvasTexture(cv);t.name=name;if(srgb)t.colorSpace=THREE.SRGBColorSpace;if(jpg)t.userData.mimeType='image/jpeg';
@@ -972,60 +1045,73 @@ async function exportGLB(post){
   async function material(m, name){ // every material leaves as a complete metal/rough set: base colour, normal, packed ORM
     if(conv.has(m))return conv.get(m);
     const T='T_'+name, em=new THREE.MeshStandardMaterial({name:'M_'+name,roughness:m.roughness,metalness:m.metalness,side:m.side,alphaTest:m.alphaTest}); let uvm=null;
-    if(m===terrainMat){
-      const [a,n,o]=bakeTerrain(LOW?2048:4096);
-      em.map=cvTex(a,T+'_BaseColor',true,true); em.normalMap=cvTex(n,T+'_Normal',false,true); em.aoMap=em.roughnessMap=em.metalnessMap=cvTex(o,T+'_ORM',false,true);
-      em.roughness=1; em.metalness=0;
-    }else{
-      em.color.setRGB(Math.min(1,m.color.r),Math.min(1,m.color.g),Math.min(1,m.color.b));
-      let map=await wait(m.map); const rot=map&&map.rotation;
-      // texture rotation is baked into the UVs rather than relying on KHR_texture_transform
-      if(rot){map.updateMatrix();uvm=map.matrix.clone()}
-      const flat=t=>{if(!rot)return t;const c=t.clone();c.rotation=0;c.needsUpdate=true;return c};
-      if(map&&m.alphaMap){ // glTF has no separate alpha map: fold it into the base colour's alpha channel
-        const al=await wait(m.alphaMap), cv=document.createElement('canvas'), W=cv.width=map.image.width, H=cv.height=map.image.height, c=cv.getContext('2d',{willReadFrequently:true});
-        c.drawImage(al.image,0,0,W,H); const av=c.getImageData(0,0,W,H).data;
-        c.clearRect(0,0,W,H); c.drawImage(map.image,0,0,W,H); const im=c.getImageData(0,0,W,H);
-        for(let i=0;i<W*H;i++)im.data[i*4+3]=av[i*4+1];
-        c.putImageData(im,0,0); map=cvTex(cv,'',true,false,map);
-      }else if(map)map=flat(map);
-      const k=m.color;
-      if(map&&Math.max(k.r,k.g,k.b)>1){ // glTF colour factors stop at 1, so a brightening tint is baked into the texture instead
-        const W=map.image.width, H=map.image.height, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
-        const c=cv.getContext('2d',{willReadFrequently:true}); c.drawImage(map.image,0,0,W,H);
-        const im=c.getImageData(0,0,W,H), d=im.data, f=[k.r,k.g,k.b].map(v=>Math.pow(v,1/2.2));
-        for(let i=0;i<d.length;i+=4){d[i]=Math.min(255,d[i]*f[0]);d[i+1]=Math.min(255,d[i+1]*f[1]);d[i+2]=Math.min(255,d[i+2]*f[2])}
-        c.putImageData(im,0,0); map=cvTex(cv,'',true,false,map); em.color.setRGB(1,1,1);
-      }
-      if(map){map.name=T+'_BaseColor';em.map=map}
-      let n=m.normalMap;
-      if(n){n=n.isRenderTargetTexture?cvTex(rtToCanvas(rtOf.get(n),1024),'',false,true,n):flat(await wait(n)); n.name=T+'_Normal'; em.normalMap=n; em.normalScale.copy(m.normalScale)}
-      const ao=await wait(m.aoMap), rg=await wait(m.roughnessMap), mt=await wait(m.metalnessMap);
-      if(ao||rg||mt)em.aoMap=em.roughnessMap=em.metalnessMap=cvTex(packORM(ao,rg,mt),T+'_ORM',false,false,ao||rg||mt);
+    em.color.setRGB(Math.min(1,m.color.r),Math.min(1,m.color.g),Math.min(1,m.color.b));
+    let map=await wait(m.map); const rot=map&&map.rotation;
+    // texture rotation is baked into the UVs rather than relying on KHR_texture_transform
+    if(rot){map.updateMatrix();uvm=map.matrix.clone()}
+    const flat=t=>{if(!rot)return t;const c=t.clone();c.rotation=0;c.needsUpdate=true;return c};
+    if(map&&m.alphaMap){ // glTF has no separate alpha map: fold it into the base colour's alpha channel
+      const al=await wait(m.alphaMap), cv=document.createElement('canvas'), W=cv.width=map.image.width, H=cv.height=map.image.height, c=cv.getContext('2d',{willReadFrequently:true});
+      c.drawImage(al.image,0,0,W,H); const av=c.getImageData(0,0,W,H).data;
+      c.clearRect(0,0,W,H); c.drawImage(map.image,0,0,W,H); const im=c.getImageData(0,0,W,H);
+      for(let i=0;i<W*H;i++)im.data[i*4+3]=av[i*4+1];
+      c.putImageData(im,0,0); map=cvTex(cv,'',true,false,map);
+    }else if(map)map=flat(map);
+    const k=m.color;
+    if(map&&Math.max(k.r,k.g,k.b)>1){ // glTF colour factors stop at 1, so a brightening tint is baked into the texture instead
+      const W=map.image.width, H=map.image.height, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+      const c=cv.getContext('2d',{willReadFrequently:true}); c.drawImage(map.image,0,0,W,H);
+      const im=c.getImageData(0,0,W,H), d=im.data, f=[k.r,k.g,k.b].map(v=>Math.pow(v,1/2.2));
+      for(let i=0;i<d.length;i+=4){d[i]=Math.min(255,d[i]*f[0]);d[i+1]=Math.min(255,d[i+1]*f[1]);d[i+2]=Math.min(255,d[i+2]*f[2])}
+      c.putImageData(im,0,0); map=cvTex(cv,'',true,false,map); em.color.setRGB(1,1,1);
     }
+    if(map){map.name=T+'_BaseColor';em.map=map}
+    let n=m.normalMap;
+    if(n){n=n.isRenderTargetTexture?cvTex(rtToCanvas(rtOf.get(n),1024),'',false,true,n):flat(await wait(n)); n.name=T+'_Normal'; em.normalMap=n; em.normalScale.copy(m.normalScale)}
+    const ao=await wait(m.aoMap), rg=await wait(m.roughnessMap), mt=await wait(m.metalnessMap);
+    if(ao||rg||mt)em.aoMap=em.roughnessMap=em.metalnessMap=cvTex(packORM(ao,rg,mt),T+'_ORM',false,false,ao||rg||mt);
     const r={em,uvm}; conv.set(m,r); return r;
   }
-  const root=new THREE.Scene(), used={};
+  const root=new THREE.Scene(), used={}, baked=new Map;
   for(const o of scene.children){
     const m=o.material;
-    if(!o.isMesh||!m.isMeshStandardMaterial||o.userData.noExport||m.userData.noExport) continue;
+    if(!o.isMesh||!m.isMeshStandardMaterial||m===terrainMat||o.userData.noExport||m.userData.noExport) continue;
     const base=names.get(m)||byMap.get(m.map)||(m.alphaMap?'BarbedWire':'Rocks');
     used[base]=(used[base]||0)+1; const name=used[base]>1?base+'_'+used[base]:base;
     const g=o.isInstancedMesh?bakeInstances(o):o.geometry.clone();
     for(const k of Object.keys(g.attributes))if(k!=='position'&&k!=='normal'&&k!=='uv')g.deleteAttribute(k);
-    if(m===terrainMat){const P=g.attributes.position, u=new Float32Array(P.count*2);
-      for(let i=0;i<P.count;i++){u[i*2]=P.getX(i)/(2*TS2)+.5;u[i*2+1]=P.getZ(i)/(2*TS2)+.5}
-      g.setAttribute('uv',new THREE.BufferAttribute(u,2))}
     const {em,uvm}=await material(m,base);
     if(uvm)g.attributes.uv.applyMatrix3(uvm);
     const me=new THREE.Mesh(g,em); me.name='SM_'+name; root.add(me);
   }
-  const buf=nameGLB(await new GLTFExporter().parseAsync(root,{binary:true}));
-  if(post)await fetch(post,{method:'POST',mode:'no-cors',body:buf});
-  else{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'model/gltf-binary'}));a.download='level-2-morice-line.glb';a.click()}
-  btn.textContent='Export .glb (Unreal Engine)';
+  const T=opt.tiles, S=opt.size, baker=terrainBaker(T,S);
+  // one distinct placeholder image per map, swapped for the baked tile in finishGLB
+  const stub=(name,srgb)=>{const cv=document.createElement('canvas');cv.width=cv.height=4;cv.getContext('2d').fillRect(0,0,4,4);return cvTex(cv,name,srgb,true)};
+  for(let tj=0;tj<T;tj++)for(let ti=0;ti<T;ti++){
+    const id='Terrain_'+tj+'_'+ti; await say('Baking ground '+(tj*T+ti+1)+' / '+T*T);
+    const em=new THREE.MeshStandardMaterial({name:'M_'+id,roughness:1,metalness:0});
+    em.map=stub('T_'+id+'_BaseColor',true); em.normalMap=stub('T_'+id+'_Normal'); em.aoMap=em.roughnessMap=em.metalnessMap=stub('T_'+id+'_ORM');
+    for(const[k,suffix]of[[0,'_BaseColor'],[1,'_Normal'],[2,'_ORM']])baked.set('T_'+id+suffix,await baker.tile(ti,tj,k));
+    const me=new THREE.Mesh(terrainTileGeo(T,ti,tj,S),em); me.name='SM_'+id; root.add(me);
+  }
+  baker.dispose();
+  let hulls=0;
+  if(opt.collision){ // Unreal's naming convention: UCX_<render mesh>_<index> becomes simple convex collision on that mesh
+    await say('Building collision...');
+    const cm=new THREE.MeshStandardMaterial({name:'M_Collision'}), cnt={};
+    for(const h of collisionHulls(T)){cnt[h.owner]=(cnt[h.owner]||0)+1; hulls++;
+      const me=new THREE.Mesh(h.geo,cm); me.name='UCX_SM_'+h.owner+'_'+String(cnt[h.owner]).padStart(3,'0'); root.add(me)}
+  }
+  await say('Writing file...');
+  const blob=finishGLB(await new GLTFExporter().parseAsync(root,{binary:true}),baked);
+  if(opt.post)await fetch(opt.post,{method:'POST',mode:'no-cors',body:blob});
+  else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='level-2-morice-line.glb';a.click()}
+  btn.disabled=false; btn.textContent='Export .glb';
+  document.getElementById('xm').textContent='Exported '+(blob.size/1048576).toFixed(0)+' MB: '+T*T+' ground tiles at '+S+' px'+(hulls?', '+hulls+' collision hulls':'')+'.';
 }
-document.getElementById('exp').addEventListener('click',e=>{exportGLB().catch(err=>{console.error(err);e.target.textContent='Export failed'})});
+document.getElementById('exp').addEventListener('click',e=>{const[t,sz]=document.getElementById('xq').value.split(',').map(Number);
+  exportGLB({tiles:t,size:sz,collision:document.getElementById('xc').checked}).catch(err=>{console.error(err);e.target.disabled=false;e.target.textContent='Export failed'})});
+if(Q.has('col')){document.getElementById('xs').checked=true;showCollision(true)}
 
 /* -------------------------------------------------------------------- loop */
 const clock=new THREE.Clock(); let slow=0, tier=0; const DOWN=new V3(0,-1,0), _d=new V3;
@@ -1036,6 +1122,9 @@ function frame(){
     const sp=(keys.ShiftLeft||keys.ShiftRight?6:2.8)*(crouch?.5:1)/Math.hypot(f,s)*dt, sy=Math.sin(player.yaw), cy=Math.cos(player.yaw);
     let nx=player.x+(-sy*f+cy*s)*sp, nz=player.z+(-cy*f-sy*s)*sp;
     for(const tr of trunks){const dx=nx-tr[0], dz=nz-tr[1], d=Math.hypot(dx,dz); if(d<tr[2]&&d>1e-4){nx=tr[0]+dx/d*tr[2];nz=tr[1]+dz/d*tr[2]}}
+    for(const q of posts){const dx=nx-q[0], dz=nz-q[1], d=Math.hypot(dx,dz), R=q[2]+.25; if(d<R&&d>1e-4){nx=q[0]+dx/d*R;nz=q[1]+dz/d*R}}
+    for(const w of walls){const A=w[0], B=w[1], ex=B[0]-A[0], ez=B[2]-A[2], tt=Math.max(0,Math.min(1,((nx-A[0])*ex+(nz-A[2])*ez)/(ex*ex+ez*ez)));
+      const dx=nx-A[0]-ex*tt, dz=nz-A[2]-ez*tt, d=Math.hypot(dx,dz), R=w[3]/2+.3; if(d<R&&d>1e-4){nx+=dx/d*(R-d);nz+=dz/d*(R-d)}}
     const d=Math.hypot(nx,nz); if(d>62){nx*=62/d;nz*=62/d}
     player.x=nx; player.z=nz; player.bob+=dt*(keys.ShiftLeft||keys.ShiftRight?11:7.5);
   }
