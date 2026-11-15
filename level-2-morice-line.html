@@ -679,15 +679,30 @@ vec2 swp=position.xz;
 #endif
 float sw=sin(uTime*1.6+swp.x*.5+swp.y*.37)*.6+sin(uTime*3.3+swp.x*1.3+position.y*.4)*.4;
 transformed.xz+=vec2(1.,.3)*sw*${w}*${w}*${amp.toFixed(3)};`);
-    if(keep)sh.fragmentShader=sh.fragmentShader.replace('#include <normal_fragment_begin>','#include <normal_fragment_begin>\n#ifdef DOUBLE_SIDED\nnormal*=faceDirection;\n#endif');
+    if(keep)sh.fragmentShader=sh.fragmentShader.replace('#include <normal_fragment_maps>','#include <normal_fragment_maps>\n#ifdef DOUBLE_SIDED\nnormal*=faceDirection;\n#endif');
   };
   return mat;
 }
+// Tangent-space normal map from a painted foliage canvas (brightness and coverage act as height),
+// so every leaflet catches its own highlight instead of the whole card shading as one flat sheet.
+function normalFrom(tex, k){
+  const src=tex.image, w=src.width, h=src.height, d=src.getContext('2d').getImageData(0,0,w,h).data, H=new Float32Array(w*h);
+  for(let i=0;i<w*h;i++)H[i]=d[i*4+3]/255*(.35+(d[i*4]+d[i*4+1]*2+d[i*4+2])/1020*1.6);
+  const cv=document.createElement('canvas'); cv.width=w; cv.height=h; const c=cv.getContext('2d'), im=c.createImageData(w,h), o=im.data;
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const nx=(H[y*w+Math.max(x-1,0)]-H[y*w+Math.min(x+1,w-1)])*k, ny=(H[Math.min(y+1,h-1)*w+x]-H[Math.max(y-1,0)*w+x])*k, l=1/Math.hypot(nx,ny,1), i=(y*w+x)*4;
+    o[i]=(nx*l*.5+.5)*255; o[i+1]=(ny*l*.5+.5)*255; o[i+2]=(l*.5+.5)*255; o[i+3]=255}
+  c.putImageData(im,0,0); const t=new THREE.CanvasTexture(cv); t.anisotropy=MAXANISO; return t;
+}
+const tPineN=normalFrom(tPine,2.2), tFernN=normalFrom(tFern,2.6), tLeafN=normalFrom(tLeaf,3);
+// rain-wet leaf: the leaf itself stays fairly rough, a clearcoat layer is the film of water on top
+const wetLeaf=(map,nmap,o)=>new THREE.MeshPhysicalMaterial(Object.assign({map,normalMap:nmap,clearcoatNormalMap:nmap,clearcoatNormalScale:new THREE.Vector2(.5,.5),
+  clearcoat:.6,clearcoatRoughness:.2,envMapIntensity:1.5,alphaTest:.4,alphaToCoverage:true,side:THREE.DoubleSide},o));
 { // pine canopy
   const g=new THREE.BufferGeometry();
   g.setAttribute('position',new THREE.Float32BufferAttribute(F.p,3)); g.setAttribute('normal',new THREE.Float32BufferAttribute(F.n,3));
   g.setAttribute('uv',new THREE.Float32BufferAttribute(F.u,2)); g.setIndex(F.i);
-  const m=new THREE.Mesh(g,foliage(new THREE.MeshStandardMaterial({map:tPine,color:C3(.62,.7,.66),alphaTest:.38,alphaToCoverage:true,side:THREE.DoubleSide,roughness:.5}),.1,false));
+  const m=new THREE.Mesh(g,foliage(new THREE.MeshStandardMaterial({map:tPine,normalMap:tPineN,normalScale:new THREE.Vector2(.8,.8),color:C3(.62,.7,.66),alphaTest:.38,alphaToCoverage:true,side:THREE.DoubleSide,roughness:.38,envMapIntensity:1.5}),.1,false));
   m.customDepthMaterial=new THREE.MeshDepthMaterial({depthPacking:THREE.RGBADepthPacking,map:tPine,alphaTest:.38,side:THREE.DoubleSide});
   m.castShadow=true; m.receiveShadow=true; m.frustumCulled=false; scene.add(m); noAO.push(m);
 }
@@ -715,9 +730,9 @@ function scatter(geo, mat, N, R, ok, smin, smax, tint){
   im.count=i; im.receiveShadow=true; im.frustumCulled=false; scene.add(im); noAO.push(im); return im;
 }
 const offLine=(x,z)=>Math.abs(z-fenceZ(x))>5.6;
-scatter(clusterGeo(9,.34,false),foliage(new THREE.MeshStandardMaterial({map:tFern,alphaTest:.4,alphaToCoverage:true,side:THREE.DoubleSide,roughness:.36}),.06,true),
+scatter(clusterGeo(9,.34,false),foliage(wetLeaf(tFern,tFernN,{normalScale:new THREE.Vector2(1.2,1.2),roughness:.45}),.06,false),
   LOW?450:1400,58,(x,z)=>tPath<.12&&offLine(x,z)&&fbm(x*.07+9,z*.07,2)>.44,.6,1.5,true);
-scatter(clusterGeo(11,.46,true),foliage(new THREE.MeshStandardMaterial({map:tLeaf,alphaTest:.4,alphaToCoverage:true,side:THREE.DoubleSide,roughness:.3}),.05,true),
+scatter(clusterGeo(11,.46,true),foliage(wetLeaf(tLeaf,tLeafN,{normalScale:new THREE.Vector2(1.4,1.4),roughness:.4,clearcoat:1,clearcoatRoughness:.1}),.05,false),
   LOW?90:260,60,(x,z)=>tPath<.08&&offLine(x,z)&&!trunks.some(t=>Math.abs(t[0]-x)<.6&&Math.abs(t[1]-z)<.6)&&fbm(x*.05+70,z*.05,2)>.5,.6,1.3,true);
 { // grass: textured tuft cards crossed at four angles, one atlas tuft each
   const p=[], nn=[], u=[], ix=[], S=3, Wd=.5, Hh=.58;
@@ -727,8 +742,8 @@ scatter(clusterGeo(11,.46,true),foliage(new THREE.MeshStandardMaterial({map:tLea
     for(let s=0;s<S;s++){const k=k0+s*2;ix.push(k,k+1,k+2,k+1,k+3,k+2)}}
   const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(p,3)); g.setAttribute('normal',new THREE.Float32BufferAttribute(nn,3));
   g.setAttribute('uv',new THREE.Float32BufferAttribute(u,2)); g.setIndex(ix);
-  // Lambert: the faked up-facing normals would otherwise give a white grazing-angle specular sheen
-  scatter(g,foliage(new THREE.MeshLambertMaterial({map:tGrass,color:C3(1.5,1.65,1.4),alphaTest:.4,alphaToCoverage:true,side:THREE.DoubleSide}),.07,true,"uv.y"),
+  // wet blades: per-blade normals from the painted atlas; specular is held back so the up-facing cards do not sheet white under the searchlight
+  scatter(g,foliage(new THREE.MeshPhysicalMaterial({map:tGrass,normalMap:normalFrom(tGrass,2.4),normalScale:new THREE.Vector2(1.1,1.1),color:C3(1.25,1.4,1.15),roughness:.6,specularIntensity:.06,envMapIntensity:.25,alphaTest:.4,alphaToCoverage:true,side:THREE.DoubleSide}),.07,true,"uv.y"),
     LOW?4500:12000,40,(x,z)=>tPath<.45&&fbm(x*.11+30,z*.11,2)>.3,.45,1.15,true);
 }
 { // rocks, mud clods and fallen twigs
@@ -798,7 +813,7 @@ void main(){vec3 box=vec3(32.,20.,32.);vec3 p=position*box;float sp=12.+4.*fract
   w+=aEnd*vec3(uWind.x*.06,-.24,uWind.z*.04);
   vec4 mv=viewMatrix*vec4(w,1.);vA=smoothstep(30.,5.,-mv.z)*smoothstep(.3,2.,-mv.z);gl_Position=projectionMatrix*mv;}`,
     fragmentShader:'uniform float uFlash;varying float vA;void main(){gl_FragColor=vec4(vec3(.5,.6,.72)*(1.+uFlash*6.),vA*.075);}'}));
-  m.frustumCulled=false; m.renderOrder=6; scene.add(m);
+  m.frustumCulled=false; m.renderOrder=6; scene.add(m); scene.userData.rain=m;
 }
 
 /* --------------------------------------------------------- post processing */
@@ -846,6 +861,21 @@ el.addEventListener('pointermove',e=>{if(!drag)return;player.yaw-=(e.clientX-dra
 const endDrag=()=>{drag=null}; el.addEventListener('pointerup',endDrag); el.addEventListener('pointercancel',endDrag);
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight)});
 
+/* -------------------------------------------------------- reflection probe */
+// The scene is captured into a cube map around the player and prefiltered, so puddles, wet mud, leaves and
+// wire reflect the trunks, canopy and lamps around them. Re-captured as the player moves.
+const noEnv=[cone,lens,spark,scene.userData.mist,scene.userData.rain];
+const envRT=new THREE.WebGLCubeRenderTarget(LOW?128:256,{type:THREE.HalfFloatType});
+const envCam=new THREE.CubeCamera(.3,500,envRT), pmrem=new THREE.PMREMGenerator(renderer), envAt=new V3;
+let envPM=null, envT=-1;
+function bakeEnv(t){
+  envAt.set(player.x,player.y+1,player.z); envT=t;
+  const vis=noEnv.map(o=>o.visible), si=spot.intensity; noEnv.forEach(o=>{o.visible=false}); spot.intensity=0;   // the sweeping beam must not be frozen into reflections
+  envCam.position.copy(envAt); envCam.update(renderer,scene);
+  noEnv.forEach((o,i)=>{o.visible=vis[i]}); spot.intensity=si;
+  const pm=pmrem.fromCubemap(envRT.texture); scene.environment=pm.texture; if(envPM)envPM.dispose(); envPM=pm;
+}
+
 /* -------------------------------------------------------------------- loop */
 const clock=new THREE.Clock(); let slow=0, tier=0; const DOWN=new V3(0,-1,0), _d=new V3;
 function frame(){
@@ -883,6 +913,7 @@ function frame(){
   const ba=t-boltT, bolt=ba<.7?Math.max(0,Math.sin(ba*31))*Math.exp(-ba*5)*(ba<.12||ba>.22?1:.15):0;
   uFlash.value=bolt*.5; sun.intensity=MOON_I+bolt*7; FOG.copy(FOG0).multiplyScalar(1+bolt*5);
   grade.uniforms.uT.value=t%10;
+  if(bolt===0&&(envT<0||(tier===0&&!hasCam&&t-envT>1.5&&Math.hypot(player.x-envAt.x,player.z-envAt.z)>9)))bakeEnv(t);
   composer.render();
   // step quality down if the device cannot hold ~30 fps
   slow=dt>.04?slow+dt:Math.max(0,slow-dt*2);
