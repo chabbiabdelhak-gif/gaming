@@ -170,12 +170,13 @@ const bakeMat = new THREE.ShaderMaterial({
 const bakeScene = new THREE.Scene(); const bakeCam = new THREE.Camera();
 bakeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bakeMat));
 const MAXANISO = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+const rtOf=new WeakMap;
 function bake(mode, kind, size){
   const rt=new THREE.WebGLRenderTarget(size,size,{wrapS:THREE.RepeatWrapping,wrapT:THREE.RepeatWrapping,
     minFilter:THREE.LinearMipmapLinearFilter,magFilter:THREE.LinearFilter,generateMipmaps:true,depthBuffer:false,anisotropy:MAXANISO});
   bakeMat.uniforms.mode.value=mode; bakeMat.uniforms.kind.value=kind; bakeMat.uniforms.texel.value=1/size;
   renderer.setRenderTarget(rt); renderer.render(bakeScene,bakeCam); renderer.setRenderTarget(null);
-  return rt.texture;
+  rtOf.set(rt.texture,rt); return rt.texture;
 }
 const TS = LOW ? 512 : 1024;
 const tMud = bake(0, 0, LOW ? 1024 : 2048), tLit = bake(3, 0, LOW ? 1024 : 2048);
@@ -899,45 +900,127 @@ function bakeInstances(im){
   out.setAttribute('position',new THREE.BufferAttribute(pos,3)); out.setAttribute('normal',new THREE.BufferAttribute(nor,3));
   out.setAttribute('uv',new THREE.BufferAttribute(uv,2)); out.setIndex(new THREE.BufferAttribute(idx,1)); return out;
 }
+function rtToCanvas(rt, max){
+  const w=rt.width, h=rt.height, px=new Uint8Array(w*h*4); renderer.readRenderTargetPixels(rt,0,0,w,h,px);
+  const cv=document.createElement('canvas'); cv.width=w; cv.height=h; const c=cv.getContext('2d'), im=c.createImageData(w,h);
+  for(let y=0;y<h;y++){const o=(h-1-y)*w*4;im.data.set(px.subarray(o,o+w*4),y*w*4)}
+  for(let i=3;i<im.data.length;i+=4)im.data[i]=255;
+  c.putImageData(im,0,0); if(!max||w<=max)return cv;
+  const sm=document.createElement('canvas'); sm.width=sm.height=max; sm.getContext('2d').drawImage(cv,0,0,max,max); return sm;
+}
+// The terrain's mud / needle-litter / puddle blend only exists in its shader, so it is rendered top-down
+// into one base-colour, normal and ORM texture set that maps 1:1 onto the exported terrain UVs.
+function bakeTerrain(size){
+  const rt=new THREE.WebGLRenderTarget(size,size,{depthBuffer:false}), u={tMud:{value:tMud},tLit:{value:tLit},mode:{value:0}};
+  const mat=new THREE.ShaderMaterial({uniforms:u,side:THREE.DoubleSide,depthTest:false,depthWrite:false,
+    vertexShader:`attribute float aWet;attribute float aPath;varying vec2 vP;varying float vWet;varying float vPath;
+void main(){vP=position.xz;vWet=aWet;vPath=aPath;gl_Position=vec4(position.x/${TS2}.,position.z/${TS2}.,0.,1.);}`,
+    fragmentShader:`uniform sampler2D tMud;uniform sampler2D tLit;uniform float mode;varying vec2 vP;varying float vWet;varying float vPath;
+void main(){
+  vec2 tp=vP;mat2 trot=mat2(.8,.6,-.6,.8);
+  vec4 m1=texture2D(tMud,tp*.31),m2=texture2D(tMud,trot*tp*2.1+.3),m3=texture2D(tMud,tp*.043+.5);
+  vec4 l1=texture2D(tLit,tp*.55),l2=texture2D(tLit,trot*tp*1.3+.2);
+  float hdM=m1.a*.5+m2.a*.3+m3.a*.2;
+  float pm=smoothstep(.3,.62,vPath+(hdM-.5)*.6);
+  float hd=mix(l1.a*.6+l2.a*.4,hdM,pm);
+  vec2 dnM=(m1.rg-.5)*5.+((m2.rg-.5)*3.2)*trot+(m3.rg-.5)*3.;
+  vec2 dnL=(l1.rg-.5)*3.6+((l2.rg-.5)*2.8)*trot+(m3.rg-.5)*2.;
+  vec2 dn=mix(dnL,dnM,pm);
+  float wd=vWet+(hdM-.47)*.11,water=smoothstep(0.,.014,wd),damp=smoothstep(-.11,0.,wd);
+  vec3 mudc=mix(vec3(.12,.094,.07),vec3(.21,.165,.12),smoothstep(.42,.72,hdM));
+  mudc=mix(mudc,vec3(.04,.033,.028),smoothstep(.54,.34,hdM)*.7);
+  vec3 litc=mix(vec3(.026,.021,.016),vec3(.19,.115,.058),smoothstep(.34,.8,l1.a));
+  litc=mix(litc,vec3(.22,.15,.08),smoothstep(.62,.92,l2.a)*.55);
+  litc=mix(litc,vec3(.03,.058,.022),smoothstep(.56,.72,m3.a)*.65);
+  vec3 col=mix(litc,mudc,pm)*mix(1.,.6,damp)*mix(.74,1.12,smoothstep(.3,.7,hd));
+  float rough=mix(mix(.72,.34,pm),mix(.5,.22,pm),damp)+(hd-.5)*.3;
+  col=mix(col,vec3(.03,.03,.028),water*smoothstep(-.02,.1,wd));rough=mix(rough,.08,water);dn*=1.-water;
+  if(mode<.5)gl_FragColor=vec4(pow(max(col,0.),vec3(1./2.2)),1.);
+  else if(mode<1.5)gl_FragColor=vec4(normalize(vec3(dn,1.))*.5+.5,1.);
+  else gl_FragColor=vec4(1.,clamp(rough,.08,1.),0.,1.);
+}`});
+  const sc=new THREE.Scene(), me=new THREE.Mesh(terrainGeo,mat); me.frustumCulled=false; sc.add(me);
+  const out=[]; for(let k=0;k<3;k++){u.mode.value=k;renderer.setRenderTarget(rt);renderer.render(sc,bakeCam);out.push(rtToCanvas(rt))}
+  renderer.setRenderTarget(null); rt.dispose(); mat.dispose(); return out;
+}
+// glTF/Unreal convention: one texture with occlusion in R, roughness in G, metallic in B
+function packORM(ao, rg, mt){
+  const ref=(ao||rg||mt).image, W=ref.width, H=ref.height, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const c=cv.getContext('2d',{willReadFrequently:true}), ch=t=>{if(!t)return null;c.clearRect(0,0,W,H);c.drawImage(t.image,0,0,W,H);return c.getImageData(0,0,W,H).data};
+  const A=ch(ao), R=ch(rg), M=ch(mt), im=c.createImageData(W,H), d=im.data;
+  for(let i=0;i<W*H;i++){d[i*4]=A?A[i*4]:255;d[i*4+1]=R?R[i*4+1]:255;d[i*4+2]=M?M[i*4+2]:255;d[i*4+3]=255}
+  c.putImageData(im,0,0); return cv;
+}
+// The exporter names nodes only; importers name their assets after meshes and images.
+function nameGLB(buf){
+  const dv=new DataView(buf), jl=dv.getUint32(12,true), j=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,20,jl)));
+  for(const n of j.nodes)if(n.mesh!==undefined)j.meshes[n.mesh].name=n.name;
+  for(const t of j.textures||[])if(t.name&&j.images[t.source])j.images[t.source].name=t.name;
+  const js=new TextEncoder().encode(JSON.stringify(j)), pad=(4-js.length%4)%4, bin=new Uint8Array(buf,20+jl);
+  const out=new Uint8Array(20+js.length+pad+bin.length); out.set(new Uint8Array(buf,0,20)); out.set(js,20); out.fill(32,20+js.length,20+js.length+pad); out.set(bin,20+js.length+pad);
+  const o=new DataView(out.buffer); o.setUint32(8,out.length,true); o.setUint32(12,js.length+pad,true); return out.buffer;
+}
 async function exportGLB(post){
   const btn=document.getElementById('exp'); btn.textContent='Exporting...'; await new Promise(r=>setTimeout(r,60));
   const {GLTFExporter}=await import('three/addons/exporters/GLTFExporter.js');
   const names=new Map([[terrainMat,'Terrain'],[barkMat,'Bark'],[woodMat,'Timber'],[steelMat,'Steel'],[wireMat,'Wire'],[insMat,'Insulators'],[signMat,'Signs']]);
   const byMap=new Map([[tPine,'PineNeedles'],[tFern,'Ferns'],[tLeaf,'Shrubs'],[tGrass,'Grass']]);
+  const wait=async t=>{while(t&&!t.image)await new Promise(r=>setTimeout(r,60));return t};   // image textures may still be decoding
+  const cvTex=(cv,name,srgb,jpg,src)=>{const t=new THREE.CanvasTexture(cv);t.name=name;if(srgb)t.colorSpace=THREE.SRGBColorSpace;if(jpg)t.userData.mimeType='image/jpeg';
+    t.wrapS=src?src.wrapS:THREE.ClampToEdgeWrapping;t.wrapT=src?src.wrapT:THREE.ClampToEdgeWrapping;return t};
+  const conv=new Map;
+  async function material(m, name){ // every material leaves as a complete metal/rough set: base colour, normal, packed ORM
+    if(conv.has(m))return conv.get(m);
+    const T='T_'+name, em=new THREE.MeshStandardMaterial({name:'M_'+name,roughness:m.roughness,metalness:m.metalness,side:m.side,alphaTest:m.alphaTest}); let uvm=null;
+    if(m===terrainMat){
+      const [a,n,o]=bakeTerrain(LOW?2048:4096);
+      em.map=cvTex(a,T+'_BaseColor',true,true); em.normalMap=cvTex(n,T+'_Normal',false,true); em.aoMap=em.roughnessMap=em.metalnessMap=cvTex(o,T+'_ORM',false,true);
+      em.roughness=1; em.metalness=0;
+    }else{
+      em.color.setRGB(Math.min(1,m.color.r),Math.min(1,m.color.g),Math.min(1,m.color.b));
+      let map=await wait(m.map); const rot=map&&map.rotation;
+      // texture rotation is baked into the UVs rather than relying on KHR_texture_transform
+      if(rot){map.updateMatrix();uvm=map.matrix.clone()}
+      const flat=t=>{if(!rot)return t;const c=t.clone();c.rotation=0;c.needsUpdate=true;return c};
+      if(map&&m.alphaMap){ // glTF has no separate alpha map: fold it into the base colour's alpha channel
+        const al=await wait(m.alphaMap), cv=document.createElement('canvas'), W=cv.width=map.image.width, H=cv.height=map.image.height, c=cv.getContext('2d',{willReadFrequently:true});
+        c.drawImage(al.image,0,0,W,H); const av=c.getImageData(0,0,W,H).data;
+        c.clearRect(0,0,W,H); c.drawImage(map.image,0,0,W,H); const im=c.getImageData(0,0,W,H);
+        for(let i=0;i<W*H;i++)im.data[i*4+3]=av[i*4+1];
+        c.putImageData(im,0,0); map=cvTex(cv,'',true,false,map);
+      }else if(map)map=flat(map);
+      const k=m.color;
+      if(map&&Math.max(k.r,k.g,k.b)>1){ // glTF colour factors stop at 1, so a brightening tint is baked into the texture instead
+        const W=map.image.width, H=map.image.height, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+        const c=cv.getContext('2d',{willReadFrequently:true}); c.drawImage(map.image,0,0,W,H);
+        const im=c.getImageData(0,0,W,H), d=im.data, f=[k.r,k.g,k.b].map(v=>Math.pow(v,1/2.2));
+        for(let i=0;i<d.length;i+=4){d[i]=Math.min(255,d[i]*f[0]);d[i+1]=Math.min(255,d[i+1]*f[1]);d[i+2]=Math.min(255,d[i+2]*f[2])}
+        c.putImageData(im,0,0); map=cvTex(cv,'',true,false,map); em.color.setRGB(1,1,1);
+      }
+      if(map){map.name=T+'_BaseColor';em.map=map}
+      let n=m.normalMap;
+      if(n){n=n.isRenderTargetTexture?cvTex(rtToCanvas(rtOf.get(n),1024),'',false,true,n):flat(await wait(n)); n.name=T+'_Normal'; em.normalMap=n; em.normalScale.copy(m.normalScale)}
+      const ao=await wait(m.aoMap), rg=await wait(m.roughnessMap), mt=await wait(m.metalnessMap);
+      if(ao||rg||mt)em.aoMap=em.roughnessMap=em.metalnessMap=cvTex(packORM(ao,rg,mt),T+'_ORM',false,false,ao||rg||mt);
+    }
+    const r={em,uvm}; conv.set(m,r); return r;
+  }
   const root=new THREE.Scene(), used={};
   for(const o of scene.children){
     const m=o.material;
     if(!o.isMesh||!m.isMeshStandardMaterial||o.userData.noExport||m.userData.noExport) continue;
-    let name=names.get(m)||byMap.get(m.map)||(m.alphaMap?'BarbedWire':'Rocks');
-    used[name]=(used[name]||0)+1; if(used[name]>1)name+='_'+used[name];
+    const base=names.get(m)||byMap.get(m.map)||(m.alphaMap?'BarbedWire':'Rocks');
+    used[base]=(used[base]||0)+1; const name=used[base]>1?base+'_'+used[base]:base;
     const g=o.isInstancedMesh?bakeInstances(o):o.geometry.clone();
     for(const k of Object.keys(g.attributes))if(k!=='position'&&k!=='normal'&&k!=='uv')g.deleteAttribute(k);
-    if(!g.attributes.uv){const P=g.attributes.position, u=new Float32Array(P.count*2);
-      for(let i=0;i<P.count;i++){u[i*2]=P.getX(i)*.25;u[i*2+1]=P.getZ(i)*.25}
+    if(m===terrainMat){const P=g.attributes.position, u=new Float32Array(P.count*2);
+      for(let i=0;i<P.count;i++){u[i*2]=P.getX(i)/(2*TS2)+.5;u[i*2+1]=P.getZ(i)/(2*TS2)+.5}
       g.setAttribute('uv',new THREE.BufferAttribute(u,2))}
-    // render-target textures cannot be read back by the exporter; image textures may still be decoding
-    const tex=async t=>{if(!t||t.isRenderTargetTexture)return null;while(!t.image)await new Promise(r=>setTimeout(r,60));return t};
-    let map=await tex(m.map), nrm=await tex(m.normalMap), rgh=await tex(m.roughnessMap), mtl=await tex(m.metalnessMap), ao=await tex(m.aoMap);
-    if(map&&map.rotation){ // bake the texture rotation into the UVs rather than rely on KHR_texture_transform
-      map.updateMatrix(); g.attributes.uv.applyMatrix3(map.matrix);
-      const flat=t=>{if(!t)return null;const c=t.clone();c.rotation=0;c.needsUpdate=true;return c};
-      map=flat(map); nrm=flat(nrm); rgh=flat(rgh); mtl=flat(mtl); ao=flat(ao);
-    }
-    if(map&&m.alphaMap){ // glTF has no separate alpha map: fold it into the base colour's alpha channel
-      const al=await tex(m.alphaMap), cv=document.createElement('canvas'), W=cv.width=map.image.width, H=cv.height=map.image.height, c=cv.getContext('2d');
-      c.drawImage(al.image,0,0,W,H); const a=c.getImageData(0,0,W,H).data;
-      c.clearRect(0,0,W,H); c.drawImage(map.image,0,0,W,H); const im=c.getImageData(0,0,W,H);
-      for(let i=0;i<W*H;i++)im.data[i*4+3]=a[i*4+1];
-      c.putImageData(im,0,0); const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; t.wrapS=map.wrapS; t.wrapT=map.wrapT; map=t;
-    }
-    const em=new THREE.MeshStandardMaterial({name:'M_'+name,roughness:m.roughness,metalness:m.metalness,side:m.side,alphaTest:m.alphaTest,
-      map,normalMap:nrm,roughnessMap:rgh,metalnessMap:mtl,aoMap:ao});
-    if(m===terrainMat){em.color.setRGB(.13,.1,.075);em.roughness=.6}
-    else em.color.setRGB(Math.min(1,m.color.r),Math.min(1,m.color.g),Math.min(1,m.color.b));
-    if(nrm)em.normalScale.copy(m.normalScale);
+    const {em,uvm}=await material(m,base);
+    if(uvm)g.attributes.uv.applyMatrix3(uvm);
     const me=new THREE.Mesh(g,em); me.name='SM_'+name; root.add(me);
   }
-  const buf=await new GLTFExporter().parseAsync(root,{binary:true});
+  const buf=nameGLB(await new GLTFExporter().parseAsync(root,{binary:true}));
   if(post)await fetch(post,{method:'POST',mode:'no-cors',body:buf});
   else{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'model/gltf-binary'}));a.download='level-2-morice-line.glb';a.click()}
   btn.textContent='Export .glb (Unreal Engine)';
