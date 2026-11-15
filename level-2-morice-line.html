@@ -12,11 +12,13 @@ canvas:active{cursor:grabbing}
 #hud b{letter-spacing:.04em}
 #load{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:15px;letter-spacing:.2em;text-transform:uppercase;transition:opacity .8s}
 #load.done{opacity:0;pointer-events:none}
+#exp{position:fixed;right:16px;bottom:14px;padding:8px 12px;border:0;border-radius:4px;font:inherit;font-size:13px;cursor:pointer}
 </style>
 </head>
 <body>
 <div id="load">La Ligne Morice</div>
 <div id="hud"><b>Level 2 · La Ligne Morice · خط موريس المكهرب · 1956</b><br>WASD / arrows to walk · Shift to run · C to crouch · drag to look</div>
+<button id="exp">Export .glb (Unreal Engine)</button>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module">
 import * as THREE from 'three';
@@ -30,6 +32,7 @@ import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 
 const ink=(r,g,b,a)=>'rgba('+[r,g,b,a].join(',')+')';
 {const L=document.getElementById('load'),U=document.getElementById('hud');document.body.style.background=L.style.background=ink(5,7,10,1);L.style.color=ink(150,160,172,1);U.style.color=ink(226,230,235,1);U.style.background=ink(6,8,12,.5)}
+{const E=document.getElementById('exp');E.style.color=ink(226,230,235,1);E.style.background=ink(6,8,12,.6)}
 const Q = new URLSearchParams(location.search);
 const LOW = Q.get('q') === 'low';
 const V3 = THREE.Vector3, C3 = (r, g, b) => new THREE.Color(r, g, b);
@@ -663,7 +666,7 @@ noAO.push(addMerged(wireG, wireMat, false));
   // negative LOD bias keeps the thin strip's alpha from averaging away before the tube takes over
   ribMat.onBeforeCompile=sh=>{sh.fragmentShader=sh.fragmentShader.replace('#include <alphamap_fragment>',
     '#ifdef USE_ALPHAMAP\ndiffuseColor.a*=texture2D(alphaMap,vAlphaMapUv,-2.5).g;\n#endif\n'+DITHER+'if(wdist>10.+3.*wdth)discard;')};
-  const lodMat=wireMat.clone();
+  const lodMat=wireMat.clone(); lodMat.userData.noExport=true;
   lodMat.onBeforeCompile=sh=>{widen(sh);sh.fragmentShader=sh.fragmentShader.replace('#include <alphamap_fragment>',DITHER+'if(wdist<10.+3.*wdth)discard;')};
   noAO.push(addMerged(ribG, ribMat, false), addMerged(wireLodG, lodMat, false));
 }
@@ -764,7 +767,7 @@ scatter(clusterGeo(11,.46,true),foliage(wetLeaf(tLeaf,tLeafN,{normalScale:new TH
   const dm=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.0065,1),
     new THREE.MeshStandardMaterial({color:C3(.8,.9,1),roughness:.14,metalness:1,emissive:C3(.2,.28,.4)}),dropM.length);
   dropM.forEach((d,i)=>{_m.compose(_p.set(d[0],d[1],d[2]),_q.identity(),_s.set(1,1.35,1));dm.setMatrixAt(i,_m)});
-  dm.frustumCulled=false; scene.add(dm); noAO.push(dm);
+  dm.frustumCulled=false; dm.userData.noExport=true; scene.add(dm); noAO.push(dm);
 }
 
 /* ------------------------------------------------- searchlight and sparks */
@@ -875,6 +878,71 @@ function bakeEnv(t){
   noEnv.forEach((o,i)=>{o.visible=vis[i]}); spot.intensity=si;
   const pm=pmrem.fromCubemap(envRT.texture); scene.environment=pm.texture; if(envPM)envPM.dispose(); envPM=pm;
 }
+
+/* ------------------------------------------------------------- glTF export */
+// Static level geometry with its base PBR textures as one .glb (metres, Y-up) for Unreal, Blender, etc.
+// Shader-driven parts have no glTF equivalent and are left out: sky, rain, mist, light beams, wind sway,
+// lights, and the terrain's mud/litter/puddle blending (the terrain ships with a flat material and tiling UVs).
+function bakeInstances(im){
+  const g=im.geometry, P=g.attributes.position, Nr=g.attributes.normal, U=g.attributes.uv, n=P.count, N=im.count, ic=g.index?g.index.count:n;
+  const pos=new Float32Array(N*n*3), nor=new Float32Array(N*n*3), uv=new Float32Array(N*n*2), idx=new Uint32Array(N*ic);
+  const m=new THREE.Matrix4, nm=new THREE.Matrix3, v=new V3;
+  for(let i=0;i<N;i++){
+    im.getMatrixAt(i,m); nm.getNormalMatrix(m);
+    for(let k=0;k<n;k++){const o=i*n+k;
+      v.fromBufferAttribute(P,k).applyMatrix4(m); pos[o*3]=v.x;pos[o*3+1]=v.y;pos[o*3+2]=v.z;
+      v.fromBufferAttribute(Nr,k).applyMatrix3(nm).normalize(); nor[o*3]=v.x;nor[o*3+1]=v.y;nor[o*3+2]=v.z;
+      uv[o*2]=U.getX(k);uv[o*2+1]=U.getY(k)}
+    for(let k=0;k<ic;k++)idx[i*ic+k]=i*n+(g.index?g.index.getX(k):k);
+  }
+  const out=new THREE.BufferGeometry();
+  out.setAttribute('position',new THREE.BufferAttribute(pos,3)); out.setAttribute('normal',new THREE.BufferAttribute(nor,3));
+  out.setAttribute('uv',new THREE.BufferAttribute(uv,2)); out.setIndex(new THREE.BufferAttribute(idx,1)); return out;
+}
+async function exportGLB(post){
+  const btn=document.getElementById('exp'); btn.textContent='Exporting...'; await new Promise(r=>setTimeout(r,60));
+  const {GLTFExporter}=await import('three/addons/exporters/GLTFExporter.js');
+  const names=new Map([[terrainMat,'Terrain'],[barkMat,'Bark'],[woodMat,'Timber'],[steelMat,'Steel'],[wireMat,'Wire'],[insMat,'Insulators'],[signMat,'Signs']]);
+  const byMap=new Map([[tPine,'PineNeedles'],[tFern,'Ferns'],[tLeaf,'Shrubs'],[tGrass,'Grass']]);
+  const root=new THREE.Scene(), used={};
+  for(const o of scene.children){
+    const m=o.material;
+    if(!o.isMesh||!m.isMeshStandardMaterial||o.userData.noExport||m.userData.noExport) continue;
+    let name=names.get(m)||byMap.get(m.map)||(m.alphaMap?'BarbedWire':'Rocks');
+    used[name]=(used[name]||0)+1; if(used[name]>1)name+='_'+used[name];
+    const g=o.isInstancedMesh?bakeInstances(o):o.geometry.clone();
+    for(const k of Object.keys(g.attributes))if(k!=='position'&&k!=='normal'&&k!=='uv')g.deleteAttribute(k);
+    if(!g.attributes.uv){const P=g.attributes.position, u=new Float32Array(P.count*2);
+      for(let i=0;i<P.count;i++){u[i*2]=P.getX(i)*.25;u[i*2+1]=P.getZ(i)*.25}
+      g.setAttribute('uv',new THREE.BufferAttribute(u,2))}
+    // render-target textures cannot be read back by the exporter; image textures may still be decoding
+    const tex=async t=>{if(!t||t.isRenderTargetTexture)return null;while(!t.image)await new Promise(r=>setTimeout(r,60));return t};
+    let map=await tex(m.map), nrm=await tex(m.normalMap), rgh=await tex(m.roughnessMap), mtl=await tex(m.metalnessMap), ao=await tex(m.aoMap);
+    if(map&&map.rotation){ // bake the texture rotation into the UVs rather than rely on KHR_texture_transform
+      map.updateMatrix(); g.attributes.uv.applyMatrix3(map.matrix);
+      const flat=t=>{if(!t)return null;const c=t.clone();c.rotation=0;c.needsUpdate=true;return c};
+      map=flat(map); nrm=flat(nrm); rgh=flat(rgh); mtl=flat(mtl); ao=flat(ao);
+    }
+    if(map&&m.alphaMap){ // glTF has no separate alpha map: fold it into the base colour's alpha channel
+      const al=await tex(m.alphaMap), cv=document.createElement('canvas'), W=cv.width=map.image.width, H=cv.height=map.image.height, c=cv.getContext('2d');
+      c.drawImage(al.image,0,0,W,H); const a=c.getImageData(0,0,W,H).data;
+      c.clearRect(0,0,W,H); c.drawImage(map.image,0,0,W,H); const im=c.getImageData(0,0,W,H);
+      for(let i=0;i<W*H;i++)im.data[i*4+3]=a[i*4+1];
+      c.putImageData(im,0,0); const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; t.wrapS=map.wrapS; t.wrapT=map.wrapT; map=t;
+    }
+    const em=new THREE.MeshStandardMaterial({name:'M_'+name,roughness:m.roughness,metalness:m.metalness,side:m.side,alphaTest:m.alphaTest,
+      map,normalMap:nrm,roughnessMap:rgh,metalnessMap:mtl,aoMap:ao});
+    if(m===terrainMat){em.color.setRGB(.13,.1,.075);em.roughness=.6}
+    else em.color.setRGB(Math.min(1,m.color.r),Math.min(1,m.color.g),Math.min(1,m.color.b));
+    if(nrm)em.normalScale.copy(m.normalScale);
+    const me=new THREE.Mesh(g,em); me.name='SM_'+name; root.add(me);
+  }
+  const buf=await new GLTFExporter().parseAsync(root,{binary:true});
+  if(post)await fetch(post,{method:'POST',mode:'no-cors',body:buf});
+  else{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'model/gltf-binary'}));a.download='level-2-morice-line.glb';a.click()}
+  btn.textContent='Export .glb (Unreal Engine)';
+}
+document.getElementById('exp').addEventListener('click',e=>{exportGLB().catch(err=>{console.error(err);e.target.textContent='Export failed'})});
 
 /* -------------------------------------------------------------------- loop */
 const clock=new THREE.Clock(); let slow=0, tier=0; const DOWN=new V3(0,-1,0), _d=new V3;
